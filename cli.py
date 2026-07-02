@@ -291,29 +291,39 @@ def run_setup_wizard():
             return
 
     # 2. S3 Storage configuration
-    print(f"\n{BOLD}3. تنظیمات فضای ذخیره‌سازی ابری S3{NC}")
-    print("ارائه‌دهندگان: aws, cloudflare, minio, arvan, custom")
-    s3_provider = input(f"  ارائه‌دهنده S3 [{config.get('s3_provider', 'custom')}]: ").strip().lower() or config.get('s3_provider', 'custom')
-    s3_endpoint = input(f"  S3 Endpoint (لینک اتصال) [{config.get('s3_endpoint', '')}]: ").strip() or config.get('s3_endpoint', '')
-    s3_access_key = input(f"  S3 Access Key [{config.get('s3_access_key', '')}]: ").strip() or config.get('s3_access_key', '')
-    s3_secret_key = input(f"  S3 Secret Key [{config.get('s3_secret_key', '')}]: ").strip() or config.get('s3_secret_key', '')
-    s3_bucket = input(f"  S3 Bucket Name (نام باکت) [{config.get('s3_bucket', '')}]: ").strip() or config.get('s3_bucket', '')
-    s3_region = input(f"  S3 Region [{config.get('s3_region', 'us-east-1')}]: ").strip() or config.get('s3_region', 'us-east-1')
-    
-    proposed_s3 = {
-        "s3_provider": s3_provider,
-        "s3_endpoint": s3_endpoint,
-        "s3_access_key": s3_access_key,
-        "s3_secret_key": s3_secret_key,
-        "s3_bucket": s3_bucket,
-        "s3_region": s3_region
-    }
-    
-    print()
-    s3_check = asyncio.run(test_s3_connection(proposed_s3))
-    if not s3_check:
-        cont = input(f"{YELLOW}  ⚠️ تست اتصال به S3 با خطا مواجه شد. آیا مایل به ثبت اطلاعات هستید؟ (y/n) [n]: {NC}").strip().lower() == 'y'
-        if not cont:
+    while True:
+        print(f"\n{BOLD}3. تنظیمات فضای ذخیره‌سازی ابری S3{NC}")
+        print("ارائه‌دهندگان: aws, cloudflare, minio, arvan, custom")
+        s3_provider = input(f"  ارائه‌دهنده S3 [{config.get('s3_provider', 'custom')}]: ").strip().lower() or config.get('s3_provider', 'custom')
+        s3_endpoint = input(f"  S3 Endpoint (لینک اتصال) [{config.get('s3_endpoint', '')}]: ").strip() or config.get('s3_endpoint', '')
+        s3_access_key = input(f"  S3 Access Key [{config.get('s3_access_key', '')}]: ").strip() or config.get('s3_access_key', '')
+        s3_secret_key = input(f"  S3 Secret Key [{config.get('s3_secret_key', '')}]: ").strip() or config.get('s3_secret_key', '')
+        s3_bucket = input(f"  S3 Bucket Name (نام باکت) [{config.get('s3_bucket', '')}]: ").strip() or config.get('s3_bucket', '')
+        s3_region = input(f"  S3 Region [{config.get('s3_region', 'us-east-1')}]: ").strip() or config.get('s3_region', 'us-east-1')
+        
+        proposed_s3 = {
+            "s3_provider": s3_provider,
+            "s3_endpoint": s3_endpoint,
+            "s3_access_key": s3_access_key,
+            "s3_secret_key": s3_secret_key,
+            "s3_bucket": s3_bucket,
+            "s3_region": s3_region
+        }
+        
+        print()
+        s3_check = asyncio.run(test_s3_connection(proposed_s3))
+        if s3_check:
+            break
+            
+        print(f"{YELLOW}⚠️  تست اتصال به S3 با خطا مواجه شد.{NC}")
+        print("1. تلاش مجدد (وارد کردن دوباره اطلاعات S3)")
+        print("2. ذخیره اطلاعات با وجود خطا (Force Save)")
+        print("3. انصراف و خروج از راه‌اندازی")
+        choice = input("یک گزینه را انتخاب کنید (1-3) [1]: ").strip() or "1"
+        
+        if choice == "2":
+            break
+        elif choice == "3":
             print("راه‌اندازی متوقف شد.")
             time_sleep(2)
             return

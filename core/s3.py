@@ -320,8 +320,5 @@ class S3Client:
         async with self.session.client(**self._get_client_args()) as s3:
             response = await s3.get_object(Bucket=self.bucket, Key=key)
             async with response["Body"] as body:
-                while True:
-                    chunk = await body.read(8192 * 16) # 128KB chunks
-                    if not chunk:
-                        break
+                async for chunk in body.iter_chunks(chunk_size=128 * 1024):
                     yield chunk

@@ -244,9 +244,20 @@ def register_short_key(key: str) -> str:
 def resolve_short_key(short_id: str) -> Optional[str]:
     return callback_registry.get(short_id)
 
-async def check_auth(client: Client, message: Message) -> bool:
+from pyrogram.types import CallbackQuery, Message
+from typing import Union
+
+async def check_auth(client: Client, message_or_query: Union[Message, CallbackQuery]) -> bool:
     """Helper to verify if a user is authorized to interact with the bot."""
-    user_id = message.from_user.id
+    if isinstance(message_or_query, CallbackQuery):
+        user_id = message_or_query.from_user.id
+        msg = message_or_query.message
+        is_cb = True
+    else:
+        user_id = message_or_query.from_user.id
+        msg = message_or_query
+        is_cb = False
+        
     config = await ConfigManager.get_config()
     owner_id = int(config.get("owner_id", 0))
     
@@ -255,12 +266,18 @@ async def check_auth(client: Client, message: Message) -> bool:
         
     authorized = await Database.is_user_authorized(user_id)
     if not authorized:
-        await message.reply(
-            f"❌ **شما مجاز به استفاده از این ربات نیستید.**\n\n"
-            f"🆔 شناسه کاربری شما: `{user_id}`\n"
-            f"لطفاً جهت دسترسی این شناسه را به مدیر ربات ارسال کنید.",
-            quote=True
-        )
+        if is_cb:
+            await message_or_query.answer(
+                f"❌ شما مجاز به استفاده از این ربات نیستید.\nشناسه شما: {user_id}",
+                show_alert=True
+            )
+        else:
+            await msg.reply(
+                f"❌ **شما مجاز به استفاده از این ربات نیستید.**\n\n"
+                f"🆔 شناسه کاربری شما: `{user_id}`\n"
+                f"لطفاً جهت دسترسی این شناسه را به مدیر ربات ارسال کنید.",
+                quote=True
+            )
         return False
     return True
 
@@ -719,7 +736,7 @@ def register_all_handlers(app: Client):
     # S3 Browser Callback query handler
     @app.on_callback_query(filters.regex(r"^s3list:(root|s_[a-f0-9]+):(\d+)$"))
     async def s3_browser_callback(client: Client, callback_query: CallbackQuery):
-        if not await check_auth(client, callback_query.message):
+        if not await check_auth(client, callback_query):
             return
             
         short_id = callback_query.matches[0].group(1)
