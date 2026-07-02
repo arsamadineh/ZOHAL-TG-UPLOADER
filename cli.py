@@ -366,7 +366,7 @@ def check_and_install_updates():
     import zipfile
     import io
     
-    repo_owner = "arsam"
+    repo_owner = "arsamadineh"
     repo_name = "ZOHAL-TG-UPLOADER"
     releases_url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/releases/latest"
     archive_url = f"https://github.com/{repo_owner}/{repo_name}/archive/refs/heads/main.zip"
