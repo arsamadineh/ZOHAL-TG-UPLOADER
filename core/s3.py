@@ -104,6 +104,23 @@ class S3Client:
         if chunk_size < 5 * 1024 * 1024:
             chunk_size = 5 * 1024 * 1024
 
+        async def _upload_part_with_retry(s3_client, bucket, key, upload_id, part_num, body_data, max_retries=3):
+            for attempt in range(max_retries):
+                try:
+                    response = await s3_client.upload_part(
+                        Bucket=bucket,
+                        Key=key,
+                        UploadId=upload_id,
+                        PartNumber=part_num,
+                        Body=body_data
+                    )
+                    return {"PartNumber": part_num, "ETag": response["ETag"]}
+                except Exception as exc:
+                    logger.warning(f"Failed to upload part {part_num} for {key} (Attempt {attempt+1}/{max_retries}): {exc}")
+                    if attempt == max_retries - 1:
+                        raise exc
+                    await asyncio.sleep(2 ** attempt)
+
         async with self.session.client(**self._get_client_args()) as s3:
             # Initiate Multipart Upload
             mp_upload = await s3.create_multipart_upload(
@@ -117,6 +134,14 @@ class S3Client:
             buffer = bytearray()
             total_uploaded = 0
             
+            semaphore = asyncio.Semaphore(8)  # limit concurrency
+
+            async def upload_task(part_num, part_data):
+                async with semaphore:
+                    part_info = await _upload_part_with_retry(s3, self.bucket, key, upload_id, part_num, part_data)
+                    return part_info, len(part_data)
+
+            tasks = []
             try:
                 async for chunk in stream:
                     buffer.extend(chunk)
@@ -126,36 +151,38 @@ class S3Client:
                         del buffer[:chunk_size]
                         
                         # Upload part
-                        part = await s3.upload_part(
-                            Bucket=self.bucket,
-                            Key=key,
-                            UploadId=upload_id,
-                            PartNumber=part_number,
-                            Body=part_data
-                        )
-                        parts.append({"PartNumber": part_number, "ETag": part["ETag"]})
-                        total_uploaded += len(part_data)
-                        
-                        if progress_callback:
-                            await progress_callback(total_uploaded)
-                            
+                        task = asyncio.create_task(upload_task(part_number, part_data))
+                        tasks.append(task)
                         part_number += 1
+
+                        # Limit number of pending tasks to avoid high memory usage
+                        if len(tasks) >= 8:
+                            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                            tasks = list(pending)
+                            for d in done:
+                                part_info, size = d.result()
+                                parts.append(part_info)
+                                total_uploaded += size
+                                if progress_callback:
+                                    await progress_callback(total_uploaded)
                 
                 # Upload remaining buffer if any
                 if len(buffer) > 0:
                     part_data = bytes(buffer)
-                    part = await s3.upload_part(
-                        Bucket=self.bucket,
-                        Key=key,
-                        UploadId=upload_id,
-                        PartNumber=part_number,
-                        Body=part_data
-                    )
-                    parts.append({"PartNumber": part_number, "ETag": part["ETag"]})
-                    total_uploaded += len(part_data)
-                    
-                    if progress_callback:
-                        await progress_callback(total_uploaded)
+                    task = asyncio.create_task(upload_task(part_number, part_data))
+                    tasks.append(task)
+
+                if tasks:
+                    done, _ = await asyncio.wait(tasks)
+                    for d in done:
+                        part_info, size = d.result()
+                        parts.append(part_info)
+                        total_uploaded += size
+                        if progress_callback:
+                            await progress_callback(total_uploaded)
+
+                # Sort parts by PartNumber since they were uploaded concurrently
+                parts.sort(key=lambda x: x["PartNumber"])
 
                 # Complete Multipart Upload
                 await s3.complete_multipart_upload(
@@ -320,5 +347,34 @@ class S3Client:
         async with self.session.client(**self._get_client_args()) as s3:
             response = await s3.get_object(Bucket=self.bucket, Key=key)
             async with response["Body"] as body:
-                async for chunk in body.iter_chunks(chunk_size=128 * 1024):
-                    yield chunk
+                if hasattr(body, "iter_chunks"):
+                    async for chunk in body.iter_chunks(chunk_size=128 * 1024):
+                        yield chunk
+                elif hasattr(body, "content") and hasattr(body.content, "iter_chunked"):
+                    async for chunk in body.content.iter_chunked(128 * 1024):
+                        yield chunk
+                elif hasattr(body, "read"):
+                    import inspect
+                    # check if read takes a size argument
+                    sig = inspect.signature(body.read)
+                    if len(sig.parameters) > 0 and 'n' not in sig.parameters and 'size' not in sig.parameters and 'chunk_size' not in sig.parameters and len([p for p in sig.parameters.values() if p.default == inspect.Parameter.empty and p.name != 'self']) == 0:
+                        # aiohttp ClientResponse.read() takes no arguments and reads the whole body
+                        # we should use content.read(size) instead
+                        while True:
+                            chunk = await body.content.read(128 * 1024)
+                            if not chunk:
+                                break
+                            yield chunk
+                    else:
+                        while True:
+                            try:
+                                chunk = await body.read(128 * 1024)
+                            except TypeError:
+                                chunk = await body.read()
+                                yield chunk
+                                break
+                            if not chunk:
+                                break
+                            yield chunk
+                else:
+                    raise Exception("Unable to iterate over response body chunks")
