@@ -1,0 +1,17 @@
+[Unit]
+Description=Zohal Uploader Bot and WebUI Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/zohal-uploader
+ExecStart=/root/zohal-uploader/venv/bin/python main.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=zohal-uploader
+
+[Install]
+WantedBy=multi-user.target
