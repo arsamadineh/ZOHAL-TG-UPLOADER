@@ -5,7 +5,7 @@ import json
 import shutil
 import asyncio
 import subprocess
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 # Ensure we can import modules from the parent/root directory
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -54,15 +54,6 @@ def show_detailed_status():
     status_output = run_cmd("systemctl status zohal")
     print(status_output)
     
-    print(f"\n{BOLD}--- PORT LISTENING STATS ---{NC}")
-    config = ConfigManager.load()
-    port = config.get("web_port", 7531)
-    port_status = run_cmd(f"ss -tulpn | grep :{port}")
-    if port_status:
-        print(f"{GREEN}Port {port} is active and listening:{NC}\n{port_status}")
-    else:
-        print(f"{RED}Port {port} is not listening.{NC}")
-        
     input(f"\nPress Enter to return to main menu...")
 
 def manage_service(action: str):
@@ -70,7 +61,6 @@ def manage_service(action: str):
     print_header()
     print(f"Executing: systemctl {action} zohal ...")
     
-    # We run systemctl command (requires root or sudo, which install.sh configured)
     res = subprocess.run(f"systemctl {action} zohal", shell=True)
     if res.returncode == 0:
         print(f"\n{GREEN}Service {action}ed successfully!{NC}")
@@ -84,7 +74,6 @@ def view_logs():
     print_header()
     print(f"{YELLOW}Opening live logs. Press Ctrl+C to exit log view.{NC}\n")
     try:
-        # Pass control directly to journalctl
         subprocess.run("journalctl -u zohal -f -n 50", shell=True)
     except KeyboardInterrupt:
         pass
@@ -97,7 +86,7 @@ def time_sleep(sec: float):
 async def list_users_db():
     config = ConfigManager.load()
     if not config.get("setup_completed"):
-        print(f"{RED}Error: Setup not completed yet. Database tables might not exist.{NC}")
+        print(f"{RED}Error: Setup not completed yet. Run option 7 in CLI first.{NC}")
         return
         
     await Database.init_db()
@@ -125,7 +114,6 @@ async def add_user_db(uid: int, username: str, name: str):
 async def remove_user_db(uid: int):
     await Database.init_db()
     
-    # Check if this is the owner
     config = ConfigManager.load()
     if uid == int(config.get("owner_id", 0)):
         print(f"\n{RED}Error: Cannot remove the main owner!{NC}")
@@ -173,87 +161,60 @@ def manage_users():
         elif choice == "3":
             break
 
-def change_port():
-    clear_screen()
-    print_header()
+async def test_telegram_connection(bot_token: Optional[str] = None, proxy: Optional[dict] = None) -> bool:
     config = ConfigManager.load()
-    current_port = config.get("web_port", 3002)
-    print(f"Current Web Panel Port: {current_port}")
-    
-    new_port_str = input("\nEnter new port number (1024-65535): ").strip()
-    if not new_port_str:
-        return
-        
-    try:
-        new_port = int(new_port_str)
-        if new_port < 1024 or new_port > 65535:
-            print(f"{RED}Port must be between 1024 and 65535!{NC}")
-            time_sleep(2)
-            return
-            
-        # Update config
-        # We can update config.json directly
-        config["web_port"] = new_port
-        ConfigManager.save_sync(config)
-        
-        print(f"\n{GREEN}Port updated to {new_port}!{NC}")
-        print("Restarting Zohal service to apply changes...")
-        subprocess.run("systemctl restart zohal", shell=True)
-        print(f"{GREEN}Restart request sent.{NC}")
-    except ValueError:
-        print(f"{RED}Invalid port number!{NC}")
-        
-    time_sleep(2.5)
-
-async def test_telegram_connection() -> bool:
-    config = ConfigManager.load()
-    bot_token = config.get("telegram_bot_token")
     if not bot_token:
-        print(f"{RED}No Telegram bot token configured yet.{NC}")
+        bot_token = config.get("telegram_bot_token")
+    if not bot_token:
+        print(f"{RED}خطا: توکن ربات تلگرام مشخص نشده است.{NC}")
         return False
         
     import httpx
-    proxy = ConfigManager.get_pyrogram_proxy()
+    if proxy is None:
+        proxy = ConfigManager.get_pyrogram_proxy()
+        
     proxies = None
     if proxy:
         auth = f"{proxy['username']}:{proxy['password']}@" if proxy.get("username") else ""
         proxies = f"{proxy['scheme']}://{auth}{proxy['hostname']}:{proxy['port']}"
         
     url = f"https://api.telegram.org/bot{bot_token}/getMe"
-    print(f"Testing Telegram connection (Proxy: {'Enabled' if proxy else 'Disabled'})...")
+    print(f"در حال تست اتصال به تلگرام (پروکسی: {'فعال' if proxy else 'غیرفعال'})...")
     
     try:
-        async with httpx.AsyncClient(proxy=proxies, timeout=10.0) as client:
+        async with httpx.AsyncClient(proxy=proxies, timeout=10.0, trust_env=False) as client:
             res = await client.get(url)
             if res.status_code == 200 and res.json().get("ok"):
                 bot_name = res.json()["result"]["first_name"]
-                print(f"{GREEN}SUCCESS! Telegram API reached. Bot: {bot_name}{NC}")
+                print(f"{GREEN}✔ موفقیت‌آمیز! نام ربات: {bot_name}{NC}")
                 return True
-            print(f"{RED}FAILED! Telegram returned: {res.text}{NC}")
+            print(f"{RED}❌ ناموفق! پاسخ سرور تلگرام: {res.text}{NC}")
             return False
     except Exception as e:
-        print(f"{RED}CONNECTION ERROR: {e}{NC}")
+        print(f"{RED}❌ خطای اتصال به تلگرام: {e}{NC}")
         return False
 
-async def test_s3_connection() -> bool:
-    config = ConfigManager.load()
-    if not config.get("s3_endpoint") or not config.get("s3_access_key"):
-        print(f"{RED}S3 storage not configured yet.{NC}")
+async def test_s3_connection(s3_config: Optional[dict] = None) -> bool:
+    if not s3_config:
+        s3_config = ConfigManager.load()
+        
+    if not s3_config.get("s3_endpoint") or not s3_config.get("s3_access_key"):
+        print(f"{RED}خطا: مشخصات اتصال S3 تعریف نشده است.{NC}")
         return False
         
     try:
         from core.s3 import S3Client
     except ImportError as e:
-        print(f"{RED}Error importing S3 client: {e}. Ensure requirements are installed.{NC}")
+        print(f"{RED}خطا در فراخوانی ماژول S3: {e}. مطمئن شوید پیش‌نیازها به درستی نصب شده باشند.{NC}")
         return False
         
-    print("Testing S3 storage connection...")
-    s3 = S3Client(config)
+    print("در حال تست اتصال به فضای ابری S3...")
+    s3 = S3Client(s3_config)
     success = await s3.test_connection()
     if success:
-        print(f"{GREEN}SUCCESS! Connected to S3 bucket: {config.get('s3_bucket')}{NC}")
+        print(f"{GREEN}✔ موفقیت‌آمیز! اتصال با موفقیت به باکت {s3_config.get('s3_bucket')} برقرار شد.{NC}")
         return True
-    print(f"{RED}FAILED! Could not connect to S3. Check endpoints and access keys.{NC}")
+    print(f"{RED}❌ ناموفق! خطای اهراز هویت یا دسترسی به S3. لطفاً پارامترها را چک کنید.{NC}")
     return False
 
 def test_connections():
@@ -261,17 +222,256 @@ def test_connections():
     print_header()
     print(f"{BOLD}--- TESTING API CONNECTIONS ---{NC}\n")
     
-    # We need to import S3Client from core.s3, which requires aioboto3
-    # If aioboto3 is missing (e.g. venv failed), print warning
     try:
-        from core.s3 import S3Client
         asyncio.run(test_telegram_connection())
         print()
         asyncio.run(test_s3_connection())
-    except ImportError as e:
-        print(f"{RED}Import Error: {e}. Please ensure python packages are installed via virtual env.{NC}")
+    except Exception as e:
+        print(f"{RED}Connection Test Error: {e}{NC}")
         
     input("\nPress Enter to return to main menu...")
+
+def run_setup_wizard():
+    clear_screen()
+    print_header()
+    print(f"{BOLD}{CYAN}🪐 راهنمای راه‌اندازی اولیه و پیکربندی ربات زحل 🪐{NC}\n")
+    print("در هر مرحله با زدن کلید Enter، مقدار قبلی/پیش‌فرض حفظ خواهد شد.\n")
+    
+    config = ConfigManager.load()
+    
+    # 1. Telegram configuration
+    print(f"{BOLD}1. تنظیمات تلگرام (ربات و اتصال){NC}")
+    api_id = input(f"  Telegram API ID [{config.get('telegram_api_id', '')}]: ").strip() or config.get('telegram_api_id', '')
+    api_hash = input(f"  Telegram API Hash [{config.get('telegram_api_hash', '')}]: ").strip() or config.get('telegram_api_hash', '')
+    bot_token = input(f"  Telegram Bot Token [{config.get('telegram_bot_token', '')}]: ").strip() or config.get('telegram_bot_token', '')
+    
+    owner_str = input(f"  شناسه عددی تلگرام مدیر ربات (Owner ID) [{config.get('owner_id', '')}]: ").strip() or str(config.get('owner_id', ''))
+    try:
+        owner_id = int(owner_str) if owner_str else 0
+    except ValueError:
+        owner_id = 0
+        
+    # Proxy Settings
+    print(f"\n{BOLD}2. تنظیمات پروکسی تلگرام (جهت سرورهای فیلترشده/ایران){NC}")
+    has_proxy = input("  آیا مایل به استفاده از پروکسی هستید؟ (y/n) [n]: ").strip().lower() == 'y'
+    proxy_type = "none"
+    proxy_host = ""
+    proxy_port = 0
+    proxy_username = ""
+    proxy_password = ""
+    
+    if has_proxy:
+        proxy_type = input("    نوع پروکسی (socks5/http) [socks5]: ").strip().lower() or "socks5"
+        proxy_host = input("    آدرس IP یا دامنه پروکسی: ").strip()
+        try:
+            proxy_port = int(input("    پورت پروکسی [1080]: ").strip() or "1080")
+        except ValueError:
+            proxy_port = 1080
+        proxy_username = input("    نام کاربری پروکسی (اختیاری): ").strip()
+        proxy_password = input("    رمز عبور پروکسی (اختیاری): ").strip()
+        
+    # Telegram proposed verification
+    proposed_proxy = None
+    if has_proxy and proxy_host:
+        proposed_proxy = {
+            "scheme": proxy_type,
+            "hostname": proxy_host,
+            "port": proxy_port,
+            "username": proxy_username,
+            "password": proxy_password
+        }
+        
+    print()
+    tg_check = asyncio.run(test_telegram_connection(bot_token, proposed_proxy))
+    if not tg_check:
+        cont = input(f"{YELLOW}  ⚠️ تست اتصال تلگرام با خطا مواجه شد. آیا همچنان مایل به ثبت هستید؟ (y/n) [n]: {NC}").strip().lower() == 'y'
+        if not cont:
+            print("راه‌اندازی متوقف شد.")
+            time_sleep(2)
+            return
+
+    # 2. S3 Storage configuration
+    print(f"\n{BOLD}3. تنظیمات فضای ذخیره‌سازی ابری S3{NC}")
+    print("ارائه‌دهندگان: aws, cloudflare, minio, arvan, custom")
+    s3_provider = input(f"  ارائه‌دهنده S3 [{config.get('s3_provider', 'custom')}]: ").strip().lower() or config.get('s3_provider', 'custom')
+    s3_endpoint = input(f"  S3 Endpoint (لینک اتصال) [{config.get('s3_endpoint', '')}]: ").strip() or config.get('s3_endpoint', '')
+    s3_access_key = input(f"  S3 Access Key [{config.get('s3_access_key', '')}]: ").strip() or config.get('s3_access_key', '')
+    s3_secret_key = input(f"  S3 Secret Key [{config.get('s3_secret_key', '')}]: ").strip() or config.get('s3_secret_key', '')
+    s3_bucket = input(f"  S3 Bucket Name (نام باکت) [{config.get('s3_bucket', '')}]: ").strip() or config.get('s3_bucket', '')
+    s3_region = input(f"  S3 Region [{config.get('s3_region', 'us-east-1')}]: ").strip() or config.get('s3_region', 'us-east-1')
+    
+    proposed_s3 = {
+        "s3_provider": s3_provider,
+        "s3_endpoint": s3_endpoint,
+        "s3_access_key": s3_access_key,
+        "s3_secret_key": s3_secret_key,
+        "s3_bucket": s3_bucket,
+        "s3_region": s3_region
+    }
+    
+    print()
+    s3_check = asyncio.run(test_s3_connection(proposed_s3))
+    if not s3_check:
+        cont = input(f"{YELLOW}  ⚠️ تست اتصال به S3 با خطا مواجه شد. آیا مایل به ثبت اطلاعات هستید؟ (y/n) [n]: {NC}").strip().lower() == 'y'
+        if not cont:
+            print("راه‌اندازی متوقف شد.")
+            time_sleep(2)
+            return
+
+    # Update config.json
+    config_updates = {
+        "telegram_api_id": api_id,
+        "telegram_api_hash": api_hash,
+        "telegram_bot_token": bot_token,
+        "owner_id": owner_id,
+        "proxy_type": proxy_type,
+        "proxy_host": proxy_host,
+        "proxy_port": proxy_port,
+        "proxy_username": proxy_username,
+        "proxy_password": proxy_password,
+        "s3_provider": s3_provider,
+        "s3_endpoint": s3_endpoint,
+        "s3_access_key": s3_access_key,
+        "s3_secret_key": s3_secret_key,
+        "s3_bucket": s3_bucket,
+        "s3_region": s3_region,
+        "setup_completed": True
+    }
+    
+    for key, val in config_updates.items():
+        config[key] = val
+        
+    ConfigManager.save_sync(config)
+    
+    # Initialize DB (since setup completed)
+    asyncio.run(Database.init_db())
+    # Add owner ID as admin if set
+    if owner_id > 0:
+        async def add_owner():
+            await Database.add_user(owner_id, "owner", "مدیر ربات", is_admin=True)
+        asyncio.run(add_owner())
+        
+    print(f"\n{GREEN}✔ پیکربندی اولیه با موفقیت ثبت شد!{NC}")
+    print("در حال راه‌اندازی مجدد ربات زحل...")
+    subprocess.run("systemctl restart zohal", shell=True)
+    print(f"{GREEN}سرویس با موفقیت استارت شد.{NC}")
+    time_sleep(3)
+
+def check_and_install_updates():
+    clear_screen()
+    print_header()
+    print(f"{BOLD}🪐 بروزرسانی هوشمند ربات زحل (Zohal TG Uploader) 🪐{NC}\n")
+    
+    import urllib.request
+    import zipfile
+    import io
+    
+    repo_owner = "arsam"
+    repo_name = "ZOHAL-TG-UPLOADER"
+    releases_url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/releases/latest"
+    archive_url = f"https://github.com/{repo_owner}/{repo_name}/archive/refs/heads/main.zip"
+    
+    print("در حال استعلام آخرین تغییرات از گیت‌هاب...")
+    req = urllib.request.Request(
+        releases_url, 
+        headers={"User-Agent": "Mozilla/5.0"}
+    )
+    
+    latest_tag = None
+    download_url = None
+    
+    try:
+        with urllib.request.urlopen(req, timeout=8) as response:
+            data = json.loads(response.read().decode())
+            latest_tag = data.get("tag_name")
+            download_url = data.get("zipball_url")
+            print(f"آخرین انتشار رسمی یافت شد: {latest_tag}")
+    except Exception:
+        # Fallback to main branch archive
+        print("انتشار رسمی یافت نشد. دریافت از آخرین کدهای شاخه main...")
+        download_url = archive_url
+        latest_tag = "Latest Commit (main branch)"
+        
+    confirm = input(f"\nآیا مایل هستید ربات را به نسخه [{latest_tag}] بروزرسانی کنید؟ (y/n) [n]: ").strip().lower()
+    if confirm != 'y':
+        return
+        
+    print("\nدر حال دانلود بسته‌ی بروزرسانی...")
+    try:
+        req_dl = urllib.request.Request(
+            download_url,
+            headers={"User-Agent": "Mozilla/5.0"}
+        )
+        with urllib.request.urlopen(req_dl, timeout=30) as response:
+            zip_data = response.read()
+            
+        print("بسته دانلود شد. در حال استخراج و آماده‌سازی فایل‌ها...")
+        z = zipfile.ZipFile(io.BytesIO(zip_data))
+        
+        # Temp dir for extraction
+        temp_dir = "/tmp/zohal_patch_update"
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
+        os.makedirs(temp_dir, exist_ok=True)
+        z.extractall(temp_dir)
+        
+        # Discover extracted directory
+        extracted = os.listdir(temp_dir)
+        if not extracted:
+            print(f"{RED}خطا: فایل استخراج شده خالی است.{NC}")
+            return
+            
+        src_path = os.path.join(temp_dir, extracted[0])
+        dest_path = "/root/zohal-uploader"
+        if not os.path.exists(dest_path):
+            dest_path = os.path.dirname(os.path.abspath(__file__))
+            
+        print("توقف موقت سرویس زحل...")
+        subprocess.run("systemctl stop zohal", shell=True)
+        
+        # Copy elements selectively (skip config, database, sessions)
+        print("در حال بروزرسانی سورس‌کد پروژه...")
+        for root, dirs, files in os.walk(src_path):
+            rel = os.path.relpath(root, src_path)
+            target = os.path.normpath(os.path.join(dest_path, rel))
+            
+            # Skip web folder since webui is removed
+            if rel.startswith("web") or rel == "web":
+                continue
+                
+            os.makedirs(target, exist_ok=True)
+            
+            for file in files:
+                # Do not overwrite credentials/db/sessions
+                if file in ["config.json", "zohal.db", "zohal.session", "zohal.session-journal"]:
+                    continue
+                    
+                src_file = os.path.join(root, file)
+                dest_file = os.path.normpath(os.path.join(target, file))
+                shutil.copy2(src_file, dest_file)
+                
+        shutil.rmtree(temp_dir)
+        
+        # Update dependencies inside venv
+        print("بروزرسانی ماژول‌های پایتون...")
+        venv_pip = os.path.join(dest_path, "venv/bin/pip")
+        reqs = os.path.join(dest_path, "requirements.txt")
+        if os.path.exists(venv_pip) and os.path.exists(reqs):
+            subprocess.run(f"{venv_pip} install -r {reqs} --upgrade", shell=True)
+            
+        # Correct permissions
+        cli_filepath = os.path.join(dest_path, "cli.py")
+        subprocess.run(f"chmod +x {cli_filepath}", shell=True)
+        
+        print("راه‌اندازی مجدد سرویس زحل...")
+        subprocess.run("systemctl daemon-reload && systemctl start zohal", shell=True)
+        print(f"\n{GREEN}✔ بروزرسانی با موفقیت انجام شد! نسخه فعلی: {latest_tag}{NC}")
+    except Exception as e:
+        print(f"\n{RED}خطا در عملیات بروزرسانی: {e}{NC}")
+        print("در حال راه‌اندازی مجدد سرویس قبلی...")
+        subprocess.run("systemctl start zohal", shell=True)
+        
+    time_sleep(4)
 
 def backup_config():
     clear_screen()
@@ -372,7 +572,6 @@ def uninstall_system():
             
         app_dir = os.path.dirname(os.path.abspath(__file__))
         print(f"Deleting app folder {app_dir} ...")
-        # Delete app folder in 3 seconds
         time_sleep(2)
         shutil.rmtree(app_dir)
         print(f"\n{GREEN}Zohal Uploader fully uninstalled.{NC}")
@@ -386,11 +585,8 @@ def main_menu():
         clear_screen()
         print_header()
         
-        config = ConfigManager.load()
-        port = config.get("web_port", 7531)
-        
-        print(f"{BOLD}Status:{NC} {get_service_status()}     |  {BOLD}Port:{NC} {port}")
-        print(f"{BOLD}WebUI URL:{NC} http://<your_server_ip>:{port}\n")
+        print(f"{BOLD}Status:{NC} {get_service_status()}")
+        print("-" * 58)
         
         print("1.  Show Detailed Status")
         print("2.  Start Zohal Service")
@@ -398,14 +594,15 @@ def main_menu():
         print("4.  Restart Zohal Service")
         print("5.  View Live Logs (journalctl)")
         print("6.  Manage Authorized Users")
-        print("7.  Change Web Panel Port")
+        print("7.  Run Setup Wizard (پیکربندی ربات)")
         print("8.  Test API Connections")
-        print("9.  Backup Configuration")
-        print("10. Restore Configuration")
-        print("11. Uninstall Zohal Uploader")
-        print("12. Exit CLI")
+        print("9.  Check & Install Updates (بروزرسانی)")
+        print("10. Backup Configuration")
+        print("11. Restore Configuration")
+        print("12. Uninstall Zohal Uploader")
+        print("13. Exit CLI")
         
-        choice = input("\nEnter choice (1-12): ").strip()
+        choice = input("\nEnter choice (1-13): ").strip()
         
         if choice == "1":
             show_detailed_status()
@@ -420,21 +617,22 @@ def main_menu():
         elif choice == "6":
             manage_users()
         elif choice == "7":
-            change_port()
+            run_setup_wizard()
         elif choice == "8":
             test_connections()
         elif choice == "9":
-            backup_config()
+            check_and_install_updates()
         elif choice == "10":
-            restore_config()
+            backup_config()
         elif choice == "11":
-            uninstall_system()
+            restore_config()
         elif choice == "12":
+            uninstall_system()
+        elif choice == "13":
             print("\nGoodbye!")
             break
 
 if __name__ == "__main__":
-    # Must run inside terminal
     try:
         main_menu()
     except KeyboardInterrupt:

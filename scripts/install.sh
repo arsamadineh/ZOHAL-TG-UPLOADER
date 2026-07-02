@@ -29,7 +29,6 @@ fi
 INSTALL_DIR="/root/zohal-uploader"
 BACKUP_CONFIG=0
 BACKUP_DB=0
-DEFAULT_PORT=7531
 
 # ─── Stop old service if running ───────────────────────────
 echo -e "${YELLOW}[Pre-flight] Stopping old service if running...${NC}"
@@ -54,12 +53,12 @@ if [ -d "$INSTALL_DIR" ]; then
 fi
 
 # ─── Step 1: System dependencies ───────────────────────────
-echo -e "\n${YELLOW}[1/6] Installing system dependencies...${NC}"
+echo -e "\n${YELLOW}[1/5] Installing system dependencies...${NC}"
 apt-get update -qq
-apt-get install -y python3 python3-pip python3-venv ffmpeg curl git ufw 2>&1 | grep -E "^(Get|Selecting|Unpacking|Setting up|Processing)" || true
+apt-get install -y python3 python3-pip python3-venv ffmpeg curl git 2>&1 | grep -E "^(Get|Selecting|Unpacking|Setting up|Processing)" || true
 
 # ─── Step 2: Copy project files ────────────────────────────
-echo -e "\n${YELLOW}[2/6] Copying project files to ${INSTALL_DIR}...${NC}"
+echo -e "\n${YELLOW}[2/5] Copying project files to ${INSTALL_DIR}...${NC}"
 mkdir -p "$INSTALL_DIR"
 CUR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [ "$CUR_DIR" != "$INSTALL_DIR" ]; then
@@ -82,18 +81,18 @@ fi
 cd "$INSTALL_DIR" || exit 1
 
 # ─── Step 3: Python virtual environment ────────────────────
-echo -e "\n${YELLOW}[3/6] Creating Python virtual environment...${NC}"
+echo -e "\n${YELLOW}[3/5] Creating Python virtual environment...${NC}"
 python3 -m venv venv
 echo -e "  ✔ venv created."
 
 # ─── Step 4: Install Python packages ───────────────────────
-echo -e "\n${YELLOW}[4/6] Installing Python packages (this may take a minute)...${NC}"
+echo -e "\n${YELLOW}[4/5] Installing Python packages (this may take a minute)...${NC}"
 venv/bin/pip install --upgrade pip -q
 venv/bin/pip install -r requirements.txt -q
 echo -e "  ✔ All Python packages installed."
 
 # ─── Step 5: CLI wrapper ────────────────────────────────────
-echo -e "\n${YELLOW}[5/6] Installing zohal-up CLI command...${NC}"
+echo -e "\n${YELLOW}[5/5] Installing zohal-up CLI command...${NC}"
 chmod +x "$INSTALL_DIR/cli.py"
 cat > /usr/local/bin/zohal-up << 'WRAPPER'
 #!/bin/bash
@@ -102,39 +101,20 @@ WRAPPER
 chmod +x /usr/local/bin/zohal-up
 echo -e "  ✔ 'zohal-up' command registered globally."
 
-# ─── Step 6: Systemd service ────────────────────────────────
-echo -e "\n${YELLOW}[6/6] Registering systemd service...${NC}"
+# ─── Register systemd service ──────────────────────────────
 if [ -f "$INSTALL_DIR/scripts/zohal.service" ]; then
   cp "$INSTALL_DIR/scripts/zohal.service" /etc/systemd/system/zohal.service
   systemctl daemon-reload
   systemctl enable zohal.service
   systemctl start zohal.service
-  echo -e "  ✔ zohal.service enabled and started."
-else
-  echo -e "${RED}  ✘ zohal.service file not found! Service not registered.${NC}"
+  echo -e "  ✔ zohal.service enabled and registered."
 fi
 
-# ─── UFW firewall: open panel port ─────────────────────────
-# Determine port from restored config or use default
-PORT=$DEFAULT_PORT
+# ─── Check if configuration is completed ───────────────────
+SETUP_COMPLETED=0
 if [ -f "$INSTALL_DIR/config.json" ]; then
-  PORT_FROM_JSON=$(python3 -c \
-    "import json; d=json.load(open('$INSTALL_DIR/config.json')); print(d.get('web_port', $DEFAULT_PORT))" \
-    2>/dev/null)
-  if [ -n "$PORT_FROM_JSON" ] && [ "$PORT_FROM_JSON" -gt 0 ] 2>/dev/null; then
-    PORT=$PORT_FROM_JSON
-  fi
+  SETUP_COMPLETED=$(python3 -c "import json; print(1 if json.load(open('$INSTALL_DIR/config.json')).get('setup_completed') else 0)" 2>/dev/null)
 fi
-
-if command -v ufw &>/dev/null; then
-  ufw allow "$PORT"/tcp comment "Zohal WebPanel" >/dev/null 2>&1
-  echo -e "  ✔ UFW: port ${PORT}/tcp allowed."
-fi
-
-# ─── Get public IP ──────────────────────────────────────────
-PUBLIC_IP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null \
-  || wget -qO- --timeout=5 https://api.ipify.org 2>/dev/null \
-  || echo "YOUR_SERVER_IP")
 
 # ─── Done! ──────────────────────────────────────────────────
 echo -e "\n${CYAN}"
@@ -142,10 +122,18 @@ echo "============================================================"
 echo "           🎉  Installation Complete!  🎉"
 echo "============================================================"
 echo -e "${NC}"
-echo -e "${GREEN}Zohal Uploader is now running as a system service.${NC}"
+echo -e "${GREEN}Zohal Uploader has been successfully installed.${NC}"
 echo ""
-echo -e "  ${BOLD}Setup Wizard (first run):${NC}"
-echo -e "  ${YELLOW}👉  http://${PUBLIC_IP}:${PORT}/setup${NC}"
+
+if [ "$SETUP_COMPLETED" -ne 1 ]; then
+  echo -e "  ${YELLOW}⚠️  توجه: ربات هنوز پیکربندی نشده است.${NC}"
+  echo -e "  برای انجام تنظیمات اولیه و فعال‌سازی ربات، دستور زیر را اجرا کنید:"
+  echo -e "  ${CYAN}zohal-up${NC} (سپس گزینه‌ی 7 را انتخاب کنید)"
+else
+  echo -e "  ${GREEN}✔ تنظیمات قبلی شناسایی و بارگذاری شد.${NC}"
+  echo -e "  ربات زحل با موفقیت در حال اجرا است."
+fi
+
 echo ""
 echo -e "  ${BOLD}CLI Management:${NC}"
 echo -e "  Type ${CYAN}zohal-up${NC} from anywhere to manage the bot."

@@ -24,11 +24,8 @@ def get_main_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
 
 def get_help_keyboard() -> InlineKeyboardMarkup:
     """Help inline markup to link to docs/features."""
-    config = ConfigManager.load()
-    port = config.get("web_port", 3002)
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📚 لیست ۵۰+ ویژگی ربات", callback_data="show_features")],
-        [InlineKeyboardButton("🌐 باز کردن وب‌پنل (WebUI)", url=f"http://localhost:{port}")]
+        [InlineKeyboardButton("📚 لیست ۵۰+ ویژگی ربات", callback_data="show_features")]
     ])
 
 def get_settings_keyboard(config: dict) -> InlineKeyboardMarkup:
@@ -116,16 +113,7 @@ def get_share_expiry_keyboard(key: str) -> InlineKeyboardMarkup:
         ]
     ])
 
-def get_web_app_keyboard(webui_url: str) -> InlineKeyboardMarkup:
-    """Keyboard to launch WebApp dashboard inside Telegram."""
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(
-                "🌐 مدیریت هوشمند (Web App)",
-                web_app=WebAppInfo(url=webui_url)
-            )
-        ]
-    ])
+
 
 def get_user_manage_keyboard(users: list) -> InlineKeyboardMarkup:
     """Manage authorized users list."""

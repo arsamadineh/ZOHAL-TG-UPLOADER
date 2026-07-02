@@ -1,14 +1,8 @@
 pyrogram==2.0.106
 tgcrypto
-fastapi
-uvicorn[standard]
-jinja2
 aioboto3
 aiosqlite
 httpx[socks]
 psutil
-pydantic
-websockets
 PySocks
 cryptography
-python-multipart

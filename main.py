@@ -1,10 +1,8 @@
 import asyncio
 import logging
-import uvicorn
 from core.config import ConfigManager
 from database.db import Database
 from bot.bot import BotService
-from web.server import app
 
 # Configure logging to console
 logging.basicConfig(
@@ -23,27 +21,32 @@ async def main():
     if config.get("setup_completed"):
         logger.info("Setup is completed. Initializing database and launching Telegram bot...")
         await Database.init_db()
-        # Start Pyrogram client in the background of this event loop
-        asyncio.create_task(BotService.start())
+        
+        # Start Pyrogram client
+        success = await BotService.start()
+        if success:
+            logger.info("Zohal Bot is running.")
+            # Keep running until interrupted or stopped
+            try:
+                while BotService.is_running():
+                    await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                pass
+        else:
+            logger.error("Failed to start Zohal Bot. Please check configurations or run zohal-up to configure.")
     else:
-        logger.warning("Setup is NOT completed. Bot will start after Setup Wizard is completed at WebUI.")
+        logger.warning("==========================================================")
+        logger.warning("⚠️  پیکربندی ربات کامل نشده است!")
+        logger.warning("لطفاً دستور 'zohal-up' را در ترمینال اجرا کنید تا تنظیمات انجام شود.")
+        logger.warning("==========================================================")
+        
+        # Keep process alive so systemd doesn't restart-loop rapidly
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            pass
 
-    # Start FastAPI Webserver (runs both the setup wizard and the dashboard)
-    # Using 0.0.0.0 to make it accessible outside, and dynamic port from config
-    port = int(config.get("web_port", 7531))
-    uvicorn_config = uvicorn.Config(
-        app=app,
-        host="0.0.0.0",
-        port=port,
-        log_level="info",
-        loop="asyncio"
-    )
-    server = uvicorn.Server(uvicorn_config)
-    
-    logger.info(f"Starting Webserver on http://0.0.0.0:{port}")
-    await server.serve()
-    
-    # Cleanup bot connection on webserver shutdown
+    # Cleanup bot connection on exit
     if BotService.is_running():
         logger.info("Stopping Bot Service on exit...")
         await BotService.stop()
