@@ -86,9 +86,16 @@ python3 -m venv venv
 echo -e "  ✔ venv created."
 
 # ─── Step 4: Install Python packages ───────────────────────
-echo -e "\n${YELLOW}[4/5] Installing Python packages (this may take a minute)...${NC}"
+echo -e "\n${YELLOW}[4/5] Installing Python packages...${NC}"
 venv/bin/pip install --upgrade pip -q
-venv/bin/pip install -r requirements.txt -q
+
+if ! venv/bin/pip install -r requirements.txt; then
+  echo -e "${YELLOW}  ⚠️ خطا در استفاده از میرور پیش‌فرض. تلاش مجدد با سرور رسمی PyPI...${NC}"
+  if ! venv/bin/pip install -r requirements.txt --index-url https://pypi.org/simple; then
+    echo -e "${RED}  ❌ خطا: نصب پیش‌نیازهای پایتون ناموفق بود. اتصال شبکه را بررسی کنید.${NC}"
+    exit 1
+  fi
+fi
 echo -e "  ✔ All Python packages installed."
 
 # ─── Step 5: CLI wrapper ────────────────────────────────────

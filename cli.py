@@ -457,7 +457,10 @@ def check_and_install_updates():
         venv_pip = os.path.join(dest_path, "venv/bin/pip")
         reqs = os.path.join(dest_path, "requirements.txt")
         if os.path.exists(venv_pip) and os.path.exists(reqs):
-            subprocess.run(f"{venv_pip} install -r {reqs} --upgrade", shell=True)
+            res_pip = subprocess.run(f"{venv_pip} install -r {reqs} --upgrade", shell=True)
+            if res_pip.returncode != 0:
+                print("خطا در دانلود با میرور پیش‌فرض. در حال تلاش با سرور رسمی PyPI...")
+                subprocess.run(f"{venv_pip} install -r {reqs} --upgrade --index-url https://pypi.org/simple", shell=True)
             
         # Correct permissions
         cli_filepath = os.path.join(dest_path, "cli.py")
