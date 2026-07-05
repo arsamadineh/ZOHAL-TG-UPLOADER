@@ -346,10 +346,10 @@ class S3Client:
         """Stream file content directly from S3 in chunks."""
         async with self.session.client(**self._get_client_args()) as s3:
             response = await s3.get_object(Bucket=self.bucket, Key=key)
-            body = response["Body"]
-            async with body:
+            async with response["Body"] as body:
+                # aioboto3 returns an aiohttp.ClientResponse; read via .content
                 while True:
-                    chunk = await body.read(128 * 1024)
+                    chunk = await body.content.read(128 * 1024)
                     if not chunk:
                         break
                     yield chunk

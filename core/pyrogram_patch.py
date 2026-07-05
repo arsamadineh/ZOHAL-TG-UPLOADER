@@ -60,10 +60,12 @@ def apply_pyrogram_patch():
 
             file_name = getattr(fp, "name", "file.bin")
 
-            # Determine file size using seek/tell
-            fp.seek(0, os.SEEK_END)
-            file_size = fp.tell()
-            fp.seek(0)
+            loop = asyncio.get_running_loop()
+
+            # Determine file size using seek/tell (run in executor for AsyncToSyncStream)
+            await loop.run_in_executor(None, fp.seek, 0, os.SEEK_END)
+            file_size = await loop.run_in_executor(None, fp.tell)
+            await loop.run_in_executor(None, fp.seek, 0)
 
             if file_size == 0:
                 raise ValueError("File size equals to 0 B")
@@ -106,11 +108,11 @@ def apply_pyrogram_patch():
             try:
                 await session.start()
 
-                # Seek to the right part start position
-                fp.seek(part_size * file_part)
+                # Seek to the right part start position (run in executor for AsyncToSyncStream)
+                await loop.run_in_executor(None, fp.seek, part_size * file_part)
 
                 while True:
-                    chunk = fp.read(part_size)
+                    chunk = await loop.run_in_executor(None, fp.read, part_size)
                     if not chunk:
                         if not is_big and not is_missing_part:
                             md5_sum = "".join([hex(i)[2:].zfill(2) for i in md5_sum.digest()])
