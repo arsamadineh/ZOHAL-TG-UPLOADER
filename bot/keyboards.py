@@ -1,7 +1,6 @@
 from pyrogram.types import (
     ReplyKeyboardMarkup, KeyboardButton,
-    InlineKeyboardMarkup, InlineKeyboardButton,
-    WebAppInfo
+    InlineKeyboardMarkup, InlineKeyboardButton
 )
 from core.config import ConfigManager
 

@@ -346,35 +346,10 @@ class S3Client:
         """Stream file content directly from S3 in chunks."""
         async with self.session.client(**self._get_client_args()) as s3:
             response = await s3.get_object(Bucket=self.bucket, Key=key)
-            async with response["Body"] as body:
-                if hasattr(body, "iter_chunks"):
-                    async for chunk in body.iter_chunks(chunk_size=128 * 1024):
-                        yield chunk
-                elif hasattr(body, "content") and hasattr(body.content, "iter_chunked"):
-                    async for chunk in body.content.iter_chunked(128 * 1024):
-                        yield chunk
-                elif hasattr(body, "read"):
-                    import inspect
-                    # check if read takes a size argument
-                    sig = inspect.signature(body.read)
-                    if len(sig.parameters) > 0 and 'n' not in sig.parameters and 'size' not in sig.parameters and 'chunk_size' not in sig.parameters and len([p for p in sig.parameters.values() if p.default == inspect.Parameter.empty and p.name != 'self']) == 0:
-                        # aiohttp ClientResponse.read() takes no arguments and reads the whole body
-                        # we should use content.read(size) instead
-                        while True:
-                            chunk = await body.content.read(128 * 1024)
-                            if not chunk:
-                                break
-                            yield chunk
-                    else:
-                        while True:
-                            try:
-                                chunk = await body.read(128 * 1024)
-                            except TypeError:
-                                chunk = await body.read()
-                                yield chunk
-                                break
-                            if not chunk:
-                                break
-                            yield chunk
-                else:
-                    raise Exception("Unable to iterate over response body chunks")
+            body = response["Body"]
+            async with body:
+                while True:
+                    chunk = await body.read(128 * 1024)
+                    if not chunk:
+                        break
+                    yield chunk

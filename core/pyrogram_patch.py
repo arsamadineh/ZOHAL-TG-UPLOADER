@@ -101,7 +101,7 @@ def apply_pyrogram_patch():
                     except Exception as e:
                         logger.exception(e)
 
-            workers = [asyncio.get_event_loop().create_task(worker(session)) for _ in range(workers_count)]
+            workers = [asyncio.get_running_loop().create_task(worker(session)) for _ in range(workers_count)]
 
             try:
                 await session.start()
@@ -150,7 +150,7 @@ def apply_pyrogram_patch():
                         if inspect.iscoroutinefunction(progress):
                             await func()
                         else:
-                            await asyncio.get_event_loop().run_in_executor(self.executor, func)
+                            await asyncio.get_running_loop().run_in_executor(self.executor, func)
             except StopTransmission:
                 raise
             except Exception as e:

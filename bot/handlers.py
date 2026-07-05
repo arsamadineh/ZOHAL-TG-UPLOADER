@@ -100,7 +100,7 @@ class AsyncToSyncStream(io.RawIOBase):
     def __init__(self, async_generator, size: int, loop: Optional[asyncio.AbstractEventLoop] = None):
         self.async_generator = async_generator
         self.size = size
-        self.loop = loop or asyncio.get_event_loop()
+        self.loop = loop or asyncio.get_running_loop()
         self.buffer = bytearray()
         self.closed_gen = False
         self.position = 0
@@ -215,7 +215,7 @@ class AsyncToSyncStream(io.RawIOBase):
 
         b = bytearray(size)
         n = self.readinto(b)
-        return bytes(b[:n])
+        return bytes(b[:n]) if n > 0 else b""
 
     def close(self):
         super().close()
@@ -328,7 +328,6 @@ def register_all_handlers(app: Client):
             f"2️⃣ **انتقال فایل تلگرام به S3:** فایل یا ویدیو تا حجم ۲ گیگابایت بفرستید تا مستقیم به فضای ابری منتقل شود.\n"
             f"3️⃣ **انتقال S3 به تلگرام:** فایل‌های ابری را دانلود و به صورت فایل تلگرامی دریافت کنید.\n"
             f"4️⃣ **دور زدن فیلترینگ تلگرام:** پشتیبانی کامل از پروکسی‌های SOCKS5/HTTP جهت کارکرد در سرورهای ایران.\n"
-            f"5️⃣ **وب‌آی‌یو (WebUI) اختصاصی:** مدیریت کاربران، آمار زنده منابع سیستم، مدیریت فایل و تنظیمات پیشرفته در مرورگر.\n\n"
             f"💡 **نحوه استفاده:** کافیست لینک دانلود مستقیم یا فایل دلخواه خود را به ربات بفرستید."
         )
         await message.reply(help_text, reply_markup=get_help_keyboard())
@@ -343,7 +342,6 @@ def register_all_handlers(app: Client):
             f"🔹 پروکسی اختصاصی فقط برای اتصالات تلگرام\n"
             f"🔹 مدیریت پیشرفته سشن‌های S3 و پشتیبانی از Arvan, Cloudflare R2, MinIO\n"
             f"🔹 ساخت لینک‌های موقت با زمان انقضا\n"
-            f"🔹 پنل وب و مانیتورینگ منابع سرور\n"
             f"🔹 اضافه کردن آسان کاربران مجاز توسط ادمین\n"
             f"🔹 دریافت و تحلیل متادیتای ویدیوها (توسط FFmpeg)\n"
             f"🔹 استخراج صدا از ویدیوها به صورت آنلاین\n"
@@ -431,7 +429,7 @@ def register_all_handlers(app: Client):
                 f"⚡️ تاخیر اتصال: {latency:.1f} میلی‌ثانیه"
             )
         else:
-            s3_text = "❌ **خطا در برقراری ارتباط با فضای ذخیره‌سازی S3!**\n\nلطفاً تنظیمات خود را در WebUI بررسی کنید."
+            s3_text = "❌ **خطا در برقراری ارتباط با فضای ذخیره‌سازی S3!**\n\nلطفاً تنظیمات خود را بررسی کنید."
             
         await callback_query.message.reply(s3_text)
 
@@ -615,6 +613,27 @@ def register_all_handlers(app: Client):
                     )
                 except Exception as e:
                     logger.error(f"Error editing menu: {e}")
+        
+        elif action == "wait_for_new_name":
+            old_key = state["key"]
+            new_key = message.text.strip()
+            
+            if not new_key:
+                await message.reply("❌ نام جدید نمی‌تواند خالی باشد.")
+                return
+            
+            user_states.pop(user_id, None)
+            
+            config = await ConfigManager.get_config()
+            s3 = S3Client(config)
+            
+            msg = await message.reply("⏳ در حال تغییر نام فایل...")
+            success = await s3.rename_file(old_key, new_key)
+            
+            if success:
+                await msg.edit_text(f"✅ فایل با موفقیت تغییر نام یافت:\n`{old_key}` ➡️ `{new_key}`")
+            else:
+                await msg.edit_text("❌ خطا در تغییر نام فایل.")
 
     # Helper to render S3 Browser with folders and pagination
     async def render_s3_browser(client: Client, chat_id: int, message_id: Optional[int], prefix: str, page: int):
@@ -890,36 +909,6 @@ def register_all_handlers(app: Client):
         )
         await callback_query.message.delete()
         await callback_query.answer()
-
-    # Wait for rename reply message handler
-    @app.on_message(filters.private & filters.reply)
-    async def rename_reply_handler(client: Client, message: Message):
-        if not await check_auth(client, message):
-            return
-        user_id = message.from_user.id
-        state = user_states.get(user_id)
-        if not state or state.get("action") != "wait_for_new_name":
-            return
-            
-        old_key = state["key"]
-        new_key = message.text.strip()
-        
-        if not new_key:
-            await message.reply("❌ نام جدید نمی‌تواند خالی باشد.")
-            return
-            
-        config = await ConfigManager.get_config()
-        s3 = S3Client(config)
-        
-        msg = await message.reply("⏳ در حال تغییر نام فایل...")
-        success = await s3.rename_file(old_key, new_key)
-        
-        user_states.pop(user_id, None)
-        
-        if success:
-            await msg.edit_text(f"✅ فایل با موفقیت تغییر نام یافت:\n`{old_key}` ➡️ `{new_key}`")
-        else:
-            await msg.edit_text("❌ خطا در تغییر نام فایل.")
 
     # Send S3 file to Telegram (MTProto streaming download)
     @app.on_callback_query(filters.regex(r"^f_dl:(s_[a-f0-9]+)$"))
@@ -1255,7 +1244,7 @@ def register_all_handlers(app: Client):
                 key=filename,
                 content_type=content_type,
                 chunk_size_mb=config.get("chunk_size_mb", 10),
-                progress_callback=None
+                progress_callback=progress_update
             )
             
             duration = time.time() - start_time
