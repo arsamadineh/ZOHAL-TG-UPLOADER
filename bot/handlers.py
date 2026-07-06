@@ -405,9 +405,13 @@ def register_all_handlers(app: Client):
     
     # ==================== TEXT MESSAGE HANDLERS ====================
     
-    @app.on_message(filters.text & filters.private & ~filters.command())
+    @app.on_message(filters.text & filters.private & filters.incoming)
     async def handle_text_input(client: Client, message: Message):
         """Handle user text input (awaiting responses)."""
+        # Skip if it's a command
+        if message.text and message.text.startswith("/"):
+            return
+        
         user_id = message.from_user.id
         
         if user_id not in user_states:
