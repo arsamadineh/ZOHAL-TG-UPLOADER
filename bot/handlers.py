@@ -622,6 +622,10 @@ async def perform_upload(client: Client, message: Message, task: TaskProgress, f
         await message.edit_text(f"❌ خطا: {str(e)[:200]}")
 
 
-def setup_commands(app: Client):
+async def setup_commands(app: Client):
     """Register slash commands."""
-    pass
+    try:
+        await app.set_bot_commands(COMMANDS_LIST)
+        logger.info("Bot commands registered successfully.")
+    except Exception as e:
+        logger.warning(f"Failed to set bot commands: {e}")
