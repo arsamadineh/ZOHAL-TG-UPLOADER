@@ -1,144 +1,328 @@
+"""
+Professional UI Keyboards - Button-driven, no commands needed.
+Each keyboard is self-contained and well-documented.
+"""
+
 from pyrogram.types import (
     ReplyKeyboardMarkup, KeyboardButton,
     InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
 )
-from core.config import ConfigManager
 
-# Bot Commands List for /help
+# Minimal commands (only for menu access)
 COMMANDS_LIST = [
-    BotCommand("start", "🪐 شروع و نمایش منوی اصلی"),
-    BotCommand("help", "📚 راهنمای جامع"),
-    BotCommand("settings", "⚙️ تنظیمات ربات"),
-    BotCommand("s3", "📁 مدیریت فایل‌های S3"),
-    BotCommand("stats", "📊 وضعیت سرور و S3"),
-    BotCommand("upload", "📤 آپلود فایل یا لینک"),
+    BotCommand("start", "🪐 شروع"),
 ]
 
+# ============================================================================
+# PERSISTENT KEYBOARDS (Always visible at bottom)
+# ============================================================================
+
 def get_main_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
-    """Generate the persistent bottom keyboard for primary actions."""
+    """Main persistent keyboard - all actions here."""
     keyboard = [
-        [
-            KeyboardButton("📤 آپلود"),
-            KeyboardButton("📁 فایل‌های S3")
-        ],
-        [
-            KeyboardButton("⚙️ تنظیمات"),
-            KeyboardButton("📚 راهنما")
-        ]
+        [KeyboardButton("📤 آپلود"), KeyboardButton("📁 مرور فایل‌ها")],
+        [KeyboardButton("⚙️ تنظیمات"), KeyboardButton("📊 وضعیت")],
     ]
     if is_admin:
-        keyboard.append([KeyboardButton("👥 کاربران"), KeyboardButton("📊 وضعیت")])
+        keyboard.append([KeyboardButton("👥 کاربران"), KeyboardButton("🔧 ادمین")])
     
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True, one_time_keyboard=False)
+    return ReplyKeyboardMarkup(
+        keyboard, resize_keyboard=True, is_persistent=True, one_time_keyboard=False
+    )
 
-def get_help_keyboard() -> InlineKeyboardMarkup:
-    """Help inline markup to link to docs/features."""
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📚 لیست ۵۰+ ویژگی ربات", callback_data="show_features")]
-    ])
 
-def get_settings_keyboard(config: dict) -> InlineKeyboardMarkup:
-    """Inline keyboard for modifying bot preferences."""
-    chunk_size = f"{config.get('chunk_size_mb', 10)} MB"
-    
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🌐 مدیریت پروکسی‌ها (شبکه)", callback_data="manage_proxies"),
-        ],
-        [
-            InlineKeyboardButton(f"حجم پارت‌ها: {chunk_size}", callback_data="change_chunk_size"),
-        ],
-        [
-            InlineKeyboardButton("📊 وضعیت منابع سرور (VPS)", callback_data="server_stats"),
-            InlineKeyboardButton("💼 وضعیت S3", callback_data="s3_stats")
-        ],
-        [
-            InlineKeyboardButton("❌ بستن منو", callback_data="close_menu")
-        ]
-    ])
+# ============================================================================
+# UPLOAD FLOW
+# ============================================================================
 
-def get_chunk_size_keyboard() -> InlineKeyboardMarkup:
-    """Choose upload chunk size."""
+def upload_type_keyboard() -> InlineKeyboardMarkup:
+    """Choose upload method."""
     return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("5 MB", callback_data="set_chunk_5"),
-            InlineKeyboardButton("10 MB", callback_data="set_chunk_10"),
-            InlineKeyboardButton("20 MB", callback_data="set_chunk_20")
-        ],
-        [
-            InlineKeyboardButton("50 MB (پیشنهادی سرور قوی)", callback_data="set_chunk_50"),
-            InlineKeyboardButton("100 MB", callback_data="set_chunk_100")
-        ],
-        [
-            InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_settings")
-        ]
-    ])
-
-def get_s3_file_options_keyboard(key: str) -> InlineKeyboardMarkup:
-    """Actions for a specific S3 file."""
-    # To keep payload under 64 bytes for Pyrogram CallbackQuery limit, we can use indices or hashes.
-    # We will compress the key or pass a truncated reference, or use state-based operations.
-    # A safe way is to send key with actions. If key is too long, it can error.
-    # So we'll pass action with file index, or keep the callback data short.
-    # Let's write short callback strings. For safety, we can use helper storage in handlers,
-    # or keep keys short. Here we assume file key is encoded/passed.
-    # Wait, we can encode actions using prefixes: "f_dl:<key>", "f_del:<key>", "f_ren:<key>", "f_sh:<key>"
-    # If the key exceeds callback limit, we can trim it or search it.
-    # Let's structure callback_data safely:
-    # Telegram max callback_data is 64 bytes. If key is long, we can store it in a temporary dict
-    # and pass a UUID/short-hash, or just hope it fits for normal keys, or use a lookup.
-    # Let's implement a clean short-hash lookup in the handlers or simply use short callback.
-    # To be extremely robust, we'll write a simple callback registry in handlers.py.
-    # For now, let's declare the structure:
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("📥 ارسال به تلگرام", callback_data=f"f_dl:{key[:30]}"),
-            InlineKeyboardButton("🔗 ساخت لینک موقت", callback_data=f"f_sh:{key[:30]}")
-        ],
-        [
-            InlineKeyboardButton("✏️ تغییر نام", callback_data=f"f_ren:{key[:30]}"),
-            InlineKeyboardButton("❌ حذف فایل", callback_data=f"f_del:{key[:30]}")
-        ],
-        [
-            InlineKeyboardButton("🔙 بازگشت به لیست", callback_data="back_to_s3_files")
-        ]
-    ])
-
-def get_share_expiry_keyboard(key: str) -> InlineKeyboardMarkup:
-    """Select duration for secure URL signature."""
-    short_key = key[:30]
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("۱ ساعت", callback_data=f"exp:3600:{short_key}"),
-            InlineKeyboardButton("۶ ساعت", callback_data=f"exp:21600:{short_key}"),
-            InlineKeyboardButton("۲۴ ساعت (۱ روز)", callback_data=f"exp:86400:{short_key}")
-        ],
-        [
-            InlineKeyboardButton("۷ روز", callback_data=f"exp:604800:{short_key}"),
-            InlineKeyboardButton("۳۰ روز", callback_data=f"exp:2592000:{short_key}")
-        ],
-        [
-            InlineKeyboardButton("🔙 بازگشت", callback_data=f"file_detail:{short_key}")
-        ]
+        [InlineKeyboardButton("📎 فایل", callback_data="upload_file_direct")],
+        [InlineKeyboardButton("🔗 لینک", callback_data="upload_url_direct")],
+        [InlineKeyboardButton("❌ انصراف", callback_data="close")],
     ])
 
 
+def upload_confirm_keyboard() -> InlineKeyboardMarkup:
+    """Confirm before upload starts."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ تایید", callback_data="upload_start")],
+        [InlineKeyboardButton("❌ انصراف", callback_data="close")],
+    ])
 
-def get_user_manage_keyboard(users: list) -> InlineKeyboardMarkup:
-    """Manage authorized users list."""
+
+def upload_progress_keyboard(task_id: str) -> InlineKeyboardMarkup:
+    """Show during upload (cancel option)."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⏸ لغو", callback_data=f"upload_cancel:{task_id}")],
+    ])
+
+
+# ============================================================================
+# FILE BROWSER - HIERARCHICAL WITH PAGINATION
+# ============================================================================
+
+def browser_folder_keyboard(
+    path: str,
+    items: list,
+    page: int = 1,
+    total_pages: int = 1
+) -> InlineKeyboardMarkup:
+    """
+    Browse folder contents with pagination.
+    items: [{'type': 'folder'|'file', 'name': str, 'size': int}]
+    """
     buttons = []
-    # Add button to register new user
-    buttons.append([InlineKeyboardButton("➕ افزودن کاربر جدید", callback_data="usr_add")])
     
-    # List current users (show username or ID)
-    for u in users[:10]: # limit to 10 for view length
-        uid = u["user_id"]
-        name = u["first_name"] or u["username"] or str(uid)
-        is_owner = u["is_admin"] == 1
-        indicator = "⭐ (مدیر)" if is_owner else "👤"
+    # Parent folder button (if not root)
+    if path and path != "/":
+        parent_path = "/".join(path.rstrip("/").split("/")[:-1]) or "/"
         buttons.append([
-            InlineKeyboardButton(f"{indicator} {name}", callback_data=f"usr_view:{uid}")
+            InlineKeyboardButton("📁 ⬆️ بالا", callback_data=f"browser_folder:{parent_path}")
         ])
-        
-    buttons.append([InlineKeyboardButton("❌ بستن", callback_data="close_menu")])
+    
+    # Items for this page (5 per page)
+    items_per_page = 5
+    start = (page - 1) * items_per_page
+    end = start + items_per_page
+    page_items = items[start:end]
+    
+    for item in page_items:
+        if item["type"] == "folder":
+            folder_path = f"{path.rstrip('/')}/{item['name']}" if path != "/" else f"/{item['name']}"
+            btn = InlineKeyboardButton(
+                f"📁 {item['name']}",
+                callback_data=f"browser_folder:{folder_path}"
+            )
+        else:
+            size_str = f" ({item.get('size', 0) / 1024 / 1024:.1f}MB)"
+            file_path = f"{path.rstrip('/')}/{item['name']}" if path != "/" else f"/{item['name']}"
+            btn = InlineKeyboardButton(
+                f"📄 {item['name']}{size_str}",
+                callback_data=f"file_select:{file_path}"
+            )
+        buttons.append([btn])
+    
+    # Pagination
+    if total_pages > 1:
+        nav = []
+        if page > 1:
+            nav.append(InlineKeyboardButton(
+                "◀️ قبل",
+                callback_data=f"browser_page:{path}:{page-1}"
+            ))
+        nav.append(InlineKeyboardButton(f"{page}/{total_pages}", callback_data="noop"))
+        if page < total_pages:
+            nav.append(InlineKeyboardButton(
+                "بعد ▶️",
+                callback_data=f"browser_page:{path}:{page+1}"
+            ))
+        buttons.append(nav)
+    
+    # Navigation footer
+    footer = [
+        InlineKeyboardButton("🔍 جستجو", callback_data="search_init"),
+        InlineKeyboardButton("🏠 صفحه اول", callback_data="browser_folder:/"),
+    ]
+    buttons.append(footer)
+    
+    buttons.append([InlineKeyboardButton("❌ بستن", callback_data="close")])
+    
     return InlineKeyboardMarkup(buttons)
+
+
+# ============================================================================
+# FILE ACTIONS
+# ============================================================================
+
+def file_actions_keyboard(file_path: str, is_admin: bool = False) -> InlineKeyboardMarkup:
+    """Actions for a selected file."""
+    buttons = [
+        [InlineKeyboardButton("📥 دانلود", callback_data=f"file_download:{file_path}")],
+        [InlineKeyboardButton("🔗 لینک موقت", callback_data=f"file_share:{file_path}")],
+        [InlineKeyboardButton("📋 کپی نام", callback_data=f"file_copy:{file_path}")],
+    ]
+    
+    if is_admin:
+        buttons.extend([
+            [InlineKeyboardButton("✏️ تغییر نام", callback_data=f"file_rename:{file_path}")],
+            [InlineKeyboardButton("❌ حذف", callback_data=f"file_delete:{file_path}")],
+        ])
+    
+    buttons.extend([
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="browser_back")],
+        [InlineKeyboardButton("❌ بستن", callback_data="close")],
+    ])
+    
+    return InlineKeyboardMarkup(buttons)
+
+
+def share_expiry_keyboard(file_path: str) -> InlineKeyboardMarkup:
+    """Choose link expiry time."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("1 ساعت", callback_data=f"share_expiry:{file_path}:3600")],
+        [InlineKeyboardButton("1 روز", callback_data=f"share_expiry:{file_path}:86400")],
+        [InlineKeyboardButton("7 روز", callback_data=f"share_expiry:{file_path}:604800")],
+        [InlineKeyboardButton("30 روز", callback_data=f"share_expiry:{file_path}:2592000")],
+        [InlineKeyboardButton("بدون انقضا", callback_data=f"share_expiry:{file_path}:0")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="browser_back")],
+    ])
+
+
+# ============================================================================
+# SEARCH
+# ============================================================================
+
+def search_results_keyboard(
+    results: list,
+    query: str,
+    page: int = 1,
+    total_pages: int = 1
+) -> InlineKeyboardMarkup:
+    """Paginated search results."""
+    buttons = []
+    
+    results_per_page = 5
+    start = (page - 1) * results_per_page
+    end = start + results_per_page
+    page_results = results[start:end]
+    
+    for result in page_results:
+        size_str = f" ({result.get('size', 0) / 1024 / 1024:.1f}MB)"
+        btn = InlineKeyboardButton(
+            f"📄 {result['name']}{size_str}",
+            callback_data=f"file_select:{result['path']}"
+        )
+        buttons.append([btn])
+    
+    # Pagination
+    if total_pages > 1:
+        nav = []
+        if page > 1:
+            nav.append(InlineKeyboardButton(
+                "◀️ قبل",
+                callback_data=f"search_page:{query}:{page-1}"
+            ))
+        nav.append(InlineKeyboardButton(f"{page}/{total_pages}", callback_data="noop"))
+        if page < total_pages:
+            nav.append(InlineKeyboardButton(
+                "بعد ▶️",
+                callback_data=f"search_page:{query}:{page+1}"
+            ))
+        buttons.append(nav)
+    
+    buttons.extend([
+        [InlineKeyboardButton("🔄 جستجوی جدید", callback_data="search_init")],
+        [InlineKeyboardButton("🏠 صفحه اول", callback_data="browser_folder:/")],
+        [InlineKeyboardButton("❌ بستن", callback_data="close")],
+    ])
+    
+    return InlineKeyboardMarkup(buttons)
+
+
+# ============================================================================
+# SETTINGS
+# ============================================================================
+
+def settings_keyboard() -> InlineKeyboardMarkup:
+    """Settings menu."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🌐 پروکسی‌ها", callback_data="settings_proxy")],
+        [InlineKeyboardButton("📤 حجم آپلود", callback_data="settings_chunk")],
+        [InlineKeyboardButton("ℹ️ اطلاعات", callback_data="settings_info")],
+        [InlineKeyboardButton("❌ بستن", callback_data="close")],
+    ])
+
+
+def chunk_size_keyboard() -> InlineKeyboardMarkup:
+    """Select chunk size."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("5MB", callback_data="chunk_set:5"),
+            InlineKeyboardButton("10MB", callback_data="chunk_set:10"),
+            InlineKeyboardButton("20MB", callback_data="chunk_set:20"),
+        ],
+        [
+            InlineKeyboardButton("50MB", callback_data="chunk_set:50"),
+            InlineKeyboardButton("100MB", callback_data="chunk_set:100"),
+        ],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="settings")],
+    ])
+
+
+# ============================================================================
+# ADMIN
+# ============================================================================
+
+def admin_keyboard() -> InlineKeyboardMarkup:
+    """Admin panel."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("👥 کاربران", callback_data="admin_users")],
+        [InlineKeyboardButton("📊 آمار", callback_data="admin_stats")],
+        [InlineKeyboardButton("❌ بستن", callback_data="close")],
+    ])
+
+
+def user_list_keyboard(users: list, page: int = 1) -> InlineKeyboardMarkup:
+    """Paginated user list."""
+    buttons = []
+    
+    users_per_page = 5
+    start = (page - 1) * users_per_page
+    end = start + users_per_page
+    page_users = users[start:end]
+    
+    for u in page_users:
+        role = "👑" if u.get("is_admin") else "👤"
+        name = u.get("first_name", "Unknown")[:15]
+        btn = InlineKeyboardButton(
+            f"{role} {name}",
+            callback_data=f"user_select:{u['user_id']}"
+        )
+        buttons.append([btn])
+    
+    # Pagination
+    total_pages = (len(users) + users_per_page - 1) // users_per_page
+    if total_pages > 1:
+        nav = []
+        if page > 1:
+            nav.append(InlineKeyboardButton("◀️", callback_data=f"users_page:{page-1}"))
+        nav.append(InlineKeyboardButton(f"{page}/{total_pages}", callback_data="noop"))
+        if page < total_pages:
+            nav.append(InlineKeyboardButton("▶️", callback_data=f"users_page:{page+1}"))
+        buttons.append(nav)
+    
+    buttons.extend([
+        [InlineKeyboardButton("➕ افزودن", callback_data="user_add")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="admin")],
+    ])
+    
+    return InlineKeyboardMarkup(buttons)
+
+
+def user_actions_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    """Actions on a user."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("❌ حذف", callback_data=f"user_remove:{user_id}")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_users")],
+    ])
+
+
+# ============================================================================
+# GENERIC
+# ============================================================================
+
+def confirm_keyboard(action: str) -> InlineKeyboardMarkup:
+    """Generic confirm/cancel."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ تایید", callback_data=f"confirm:{action}"),
+            InlineKeyboardButton("❌ انصراف", callback_data="close"),
+        ]
+    ])
+
+
+def close_button() -> InlineKeyboardMarkup:
+    """Just a close button."""
+    return InlineKeyboardMarkup([[InlineKeyboardButton("❌ بستن", callback_data="close")]])

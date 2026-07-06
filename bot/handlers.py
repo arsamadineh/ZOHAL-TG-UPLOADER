@@ -1,358 +1,541 @@
-import io
-import os
-import time
-import uuid
-import math
-import asyncio
+"""
+Zohal Uploader Bot Handlers - Button-driven, modular, professional.
+All user interactions flow through button callbacks and persistent keyboard.
+"""
+
 import logging
-import urllib.parse
-from typing import Dict, Any, Optional
+import uuid
+import asyncio
+from typing import Optional, Dict, Any
 from pyrogram import Client, filters
-from pyrogram.types import Message, CallbackQuery, ForceReply, InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.types import Message, CallbackQuery, ForceReply
 from core.config import ConfigManager
 from core.s3 import S3Client
-from core.downloader import HTTPDownloader
 from core.manager import TaskManager, TaskProgress
+from core.downloader import HTTPDownloader
 from database.db import Database
 from bot.keyboards import (
-    get_main_keyboard, get_help_keyboard, get_settings_keyboard,
-    get_chunk_size_keyboard, get_s3_file_options_keyboard,
-    get_share_expiry_keyboard, get_user_manage_keyboard, COMMANDS_LIST
+    get_main_keyboard, upload_type_keyboard, upload_confirm_keyboard,
+    browser_folder_keyboard, file_actions_keyboard, share_expiry_keyboard,
+    search_results_keyboard, settings_keyboard, chunk_size_keyboard,
+    admin_keyboard, user_list_keyboard, user_actions_keyboard,
+    confirm_keyboard, close_button, COMMANDS_LIST
 )
 
 logger = logging.getLogger("ZohalHandlers")
 
-# Global state management
+# User state tracking
 user_states: Dict[int, Dict[str, Any]] = {}
-callback_registry: Dict[str, str] = {}
-media_upload_states: Dict[str, Dict[str, Any]] = {}
+upload_pending: Dict[int, Dict[str, Any]] = {}  # Pending uploads before confirmation
 
 
-def parse_proxy_string(proxy_str: str) -> Optional[dict]:
-    """Parse proxy string into structured format."""
-    try:
-        if "://" not in proxy_str:
-            proxy_str = "socks5://" + proxy_str
-        parsed = urllib.parse.urlparse(proxy_str)
-        scheme = parsed.scheme.lower()
-        if scheme not in ["socks5", "http", "https"]:
-            return None
-        
-        netloc = parsed.netloc
-        if "@" in netloc:
-            auth, host_port = netloc.split("@", 1)
-            username, password = auth.split(":", 1) if ":" in auth else (auth, "")
-        else:
-            host_port = netloc
-            username, password = "", ""
-            
-        host, port = host_port.split(":", 1) if ":" in host_port else (host_port, 1080)
-        return {
-            "name": f"پروکسی {host}",
-            "scheme": scheme,
-            "host": host,
-            "port": int(port),
-            "username": username,
-            "password": password
-        }
-    except Exception:
-        return None
-
-
-def register_short_key(key: str) -> str:
-    """Register S3 key under short ID for Telegram callback limits (<64 bytes)."""
-    short_id = f"s_{uuid.uuid4().hex[:8]}"
-    callback_registry[short_id] = key
-    if len(callback_registry) > 5000:
-        keys_to_remove = list(callback_registry.keys())[:1000]
-        for k in keys_to_remove:
-            callback_registry.pop(k, None)
-    return short_id
-
-
-def resolve_short_key(short_id: str) -> Optional[str]:
-    """Resolve short key back to original S3 key."""
-    return callback_registry.get(short_id)
-
-
-async def check_auth(client: Client, message_or_query) -> bool:
-    """Verify user authorization."""
-    if isinstance(message_or_query, CallbackQuery):
-        user_id = message_or_query.from_user.id
-        msg = message_or_query.message
-        is_cb = True
-    else:
-        user_id = message_or_query.from_user.id
-        msg = message_or_query
-        is_cb = False
-        
+async def check_auth(user_id: int) -> bool:
+    """Check if user is authorized."""
     config = await ConfigManager.get_config()
     owner_id = int(config.get("owner_id", 0))
     
     if user_id == owner_id:
         return True
-        
-    authorized = await Database.is_user_authorized(user_id)
-    if not authorized:
-        if is_cb:
-            await message_or_query.answer(
-                f"❌ شما مجاز به استفاده از این ربات نیستید.\nشناسه شما: {user_id}",
-                show_alert=True
-            )
-        else:
-            await msg.reply(
-                f"❌ **شما مجاز به استفاده از این ربات نیستید.**\n\n"
-                f"🆔 شناسه کاربری شما: `{user_id}`\n"
-                f"لطفاً جهت دسترسی این شناسه را به مدیر ربات ارسال کنید.",
-                quote=True
-            )
-        return False
-    return True
+    
+    return await Database.is_user_authorized(user_id)
+
+
+async def is_admin(user_id: int) -> bool:
+    """Check if user is admin."""
+    config = await ConfigManager.get_config()
+    owner_id = int(config.get("owner_id", 0))
+    return user_id == owner_id
 
 
 def register_all_handlers(app: Client):
-    """Register all bot command and callback handlers."""
+    """Register all handlers."""
     
-    # ==================== CORE COMMANDS ====================
+    # ==================== START / HELP ====================
     
     @app.on_message(filters.command("start") & filters.private)
     async def cmd_start(client: Client, message: Message):
-        """Bot start command."""
+        """Start command - show main menu."""
         user_id = message.from_user.id
+        
+        if not await check_auth(user_id):
+            await message.reply(f"❌ شما مجاز نیستید.\nشناسه: `{user_id}`")
+            return
+        
+        is_admin_user = await is_admin(user_id)
         config = await ConfigManager.get_config()
         owner_id = int(config.get("owner_id", 0))
         
-        is_admin = (user_id == owner_id)
-        if is_admin:
+        if is_admin_user and owner_id == 0:
             await Database.add_user(user_id, message.from_user.username, message.from_user.first_name, is_admin=True)
-            
-        authorized = is_admin or await Database.is_user_authorized(user_id)
         
-        if not authorized:
-            await message.reply(
-                f"⚠️ **ربات آپلودر زحل**\n\n"
-                f"دسترسی شما مجاز نمی‌باشد.\n"
-                f"🆔 شناسه شما: `{user_id}`"
-            )
-            return
-
-        welcome_text = (
-            f"🪐 **به ربات هوشمند آپلودر زحل خوش آمدید!**\n\n"
-            f"این ربات بدون پر کردن سرور، فایل‌ها را بین تلگرام و S3 منتقل می‌کند.\n\n"
-            f"**برای شروع:**\n"
-            f"• `📤 آپلود` برای ارسال فایل یا لینک\n"
-            f"• `📁 فایل‌های S3` برای مدیریت فایل‌ها\n"
-            f"• `📚 راهنما` برای جزئیات کامل\n"
-        )
-        await message.reply(welcome_text, reply_markup=get_main_keyboard(is_admin))
-
-    @app.on_message(filters.command("help") & filters.private)
-    async def cmd_help(client: Client, message: Message):
-        """Help command with feature list."""
-        if not await check_auth(client, message):
+        text = "🪐 **به ربات آپلودر زحل خوش آمدید!**\n\nدکمه‌های زیر را استفاده کنید."
+        await message.reply(text, reply_markup=get_main_keyboard(is_admin_user))
+    
+    
+    # ==================== PERSISTENT BUTTONS ====================
+    
+    @app.on_message(filters.text & filters.private & filters.regex(r"^📤 آپلود$"))
+    async def btn_upload(client: Client, message: Message):
+        """Upload button."""
+        user_id = message.from_user.id
+        if not await check_auth(user_id):
             return
         
-        help_text = (
-            f"📚 **راهنمای ربات آپلودر زحل**\n\n"
-            f"**🔹 ویژگی‌های اصلی:**\n"
-            f"1️⃣ **URL → S3:** لینک دانلود را بفرستید، بدون مصرف دیسک در S3 ذخیره می‌شود\n"
-            f"2️⃣ **تلگرام → S3:** فایل تا ۲GB را مستقیم به S3 منتقل کنید\n"
-            f"3️⃣ **S3 → تلگرام:** فایل‌های S3 را دانلود کنید\n"
-            f"4️⃣ **دور زدن فیلترینگ:** پروکسی SOCKS5/HTTP برای ایران\n"
-            f"5️⃣ **لینک‌های موقت:** ساخت لینک‌های زمان‌دار\n\n"
-            f"**⚙️ دستورات:**\n"
-            f"/upload - آپلود فایل یا لینک\n"
-            f"/s3 - مدیریت فایل‌های S3\n"
-            f"/settings - تنظیمات\n"
-            f"/stats - وضعیت سرور\n"
-        )
-        await message.reply(help_text, reply_markup=get_help_keyboard())
-
-    @app.on_message(filters.command("settings") & filters.private)
-    async def cmd_settings(client: Client, message: Message):
-        """Settings command."""
-        if not await check_auth(client, message):
-            return
-        config = await ConfigManager.get_config()
         await message.reply(
-            "⚙️ **تنظیمات ربات زحل**",
-            reply_markup=get_settings_keyboard(config)
+            "📤 **آپلود فایل یا لینک**\n\nروش را انتخاب کنید:",
+            reply_markup=upload_type_keyboard()
         )
-
-    @app.on_message(filters.command("stats") & filters.private)
-    async def cmd_stats(client: Client, message: Message):
-        """Server and S3 stats."""
-        if not await check_auth(client, message):
-            return
-        
-        import psutil
-        cpu = psutil.cpu_percent()
-        ram = psutil.virtual_memory().percent
-        disk = psutil.disk_usage("/").percent
-        
-        config = await ConfigManager.get_config()
-        s3 = S3Client(config)
-        
-        start = time.time()
-        s3_ok = await s3.test_connection()
-        latency = (time.time() - start) * 1000
-        
-        stats_text = (
-            f"📊 **وضعیت سرور و S3**\n\n"
-            f"**سرور:**\n"
-            f"🖥 CPU: {cpu}%\n"
-            f"💾 RAM: {ram}%\n"
-            f"💽 دیسک: {disk}%\n\n"
-            f"**S3:**\n"
-            f"{'✅ متصل' if s3_ok else '❌ قطع‌شده'}\n"
-            f"⚡️ تاخیر: {latency:.0f}ms\n"
-            f"📦 باکت: `{config.get('s3_bucket')}`"
-        )
-        await message.reply(stats_text)
-
-    @app.on_message(filters.command("upload") & filters.private)
-    async def cmd_upload(client: Client, message: Message):
-        """Upload command."""
-        if not await check_auth(client, message):
-            return
-        await message.reply(
-            "📤 **آپلود فایل یا لینک**\n\n"
-            "گزینه‌های زیر را انتخاب کنید:\n"
-            "• یک **فایل** را بفرستید\n"
-            "• یک **لینک مستقیم** برای دانلود کنید\n"
-            "• یا از دکمه `📤 آپلود` استفاده کنید"
-        )
-
-    @app.on_message(filters.command("s3") & filters.private)
-    async def cmd_s3(client: Client, message: Message):
-        """S3 file management command."""
-        if not await check_auth(client, message):
+    
+    
+    @app.on_message(filters.text & filters.private & filters.regex(r"^📁 مرور فایل‌ها$"))
+    async def btn_browser(client: Client, message: Message):
+        """File browser button."""
+        user_id = message.from_user.id
+        if not await check_auth(user_id):
             return
         
         config = await ConfigManager.get_config()
         s3 = S3Client(config)
         
         try:
-            files = await s3.list_files()
-            if not files:
-                await message.reply("📁 **فایل‌های S3**\n\nهیچ فایلی موجود نیست.")
-                return
-                
-            text = f"📁 **فایل‌های S3** ({len(files)} فایل)\n\n"
-            for i, f in enumerate(files[:10], 1):
-                size_mb = f.get('size', 0) / (1024 * 1024)
-                text += f"{i}. `{f['key']}` ({size_mb:.2f}MB)\n"
+            items = await s3.list_files_in_folder("/")
+            total = len(items)
+            total_pages = (total + 4) // 5  # 5 per page
             
-            if len(files) > 10:
-                text += f"\n... و {len(files) - 10} فایل دیگر"
-            
-            await message.reply(text)
+            await message.reply(
+                f"📁 **فایل‌های S3** ({total} آیتم)",
+                reply_markup=browser_folder_keyboard("/", items, 1, total_pages)
+            )
         except Exception as e:
-            await message.reply(f"❌ خطا در دریافت لیست: {str(e)}")
-
-    # ==================== TEXT BUTTON HANDLERS ====================
+            await message.reply(f"❌ خطا: {str(e)[:100]}")
     
-    @app.on_message(filters.text & filters.private & filters.regex(r"^📤 آپلود$"))
-    async def btn_upload(client: Client, message: Message):
-        """Upload button handler."""
-        if not await check_auth(client, message):
-            return
-        await cmd_upload(client, message)
-
-    @app.on_message(filters.text & filters.private & filters.regex(r"^📁 فایل‌های S3$"))
-    async def btn_s3_files(client: Client, message: Message):
-        """S3 files button handler."""
-        if not await check_auth(client, message):
-            return
-        await cmd_s3(client, message)
-
+    
     @app.on_message(filters.text & filters.private & filters.regex(r"^⚙️ تنظیمات$"))
     async def btn_settings(client: Client, message: Message):
-        """Settings button handler."""
-        if not await check_auth(client, message):
+        """Settings button."""
+        user_id = message.from_user.id
+        if not await check_auth(user_id):
             return
-        await cmd_settings(client, message)
-
-    @app.on_message(filters.text & filters.private & filters.regex(r"^📚 راهنما$"))
-    async def btn_help(client: Client, message: Message):
-        """Help button handler."""
-        if not await check_auth(client, message):
+        
+        await message.reply(
+            "⚙️ **تنظیمات**",
+            reply_markup=settings_keyboard()
+        )
+    
+    
+    @app.on_message(filters.text & filters.private & filters.regex(r"^📊 وضعیت$"))
+    async def btn_status(client: Client, message: Message):
+        """Status button."""
+        user_id = message.from_user.id
+        if not await check_auth(user_id):
             return
-        await cmd_help(client, message)
-
+        
+        try:
+            import psutil
+            config = await ConfigManager.get_config()
+            s3 = S3Client(config)
+            
+            cpu = psutil.cpu_percent()
+            ram = psutil.virtual_memory().percent
+            disk = psutil.disk_usage("/").percent
+            s3_ok = await s3.test_connection()
+            
+            text = (
+                f"📊 **وضعیت سرور**\n\n"
+                f"💻 CPU: {cpu}%\n"
+                f"💾 RAM: {ram}%\n"
+                f"💽 Disk: {disk}%\n"
+                f"🪣 S3: {'✅' if s3_ok else '❌'}"
+            )
+            
+            await message.reply(text, reply_markup=close_button())
+        except Exception as e:
+            await message.reply(f"❌ خطا: {str(e)}")
+    
+    
     @app.on_message(filters.text & filters.private & filters.regex(r"^👥 کاربران$"))
     async def btn_users(client: Client, message: Message):
         """User management button (admin only)."""
         user_id = message.from_user.id
-        config = await ConfigManager.get_config()
-        owner_id = int(config.get("owner_id", 0))
-        
-        if user_id != owner_id:
+        if not await is_admin(user_id):
             return
-            
-        users = await Database.get_users()
+        
         await message.reply(
             "👥 **مدیریت کاربران**",
-            reply_markup=get_user_manage_keyboard(users)
+            reply_markup=admin_keyboard()
         )
-
-    @app.on_message(filters.text & filters.private & filters.regex(r"^📊 وضعیت$"))
-    async def btn_stats(client: Client, message: Message):
-        """Stats button handler."""
-        if not await check_auth(client, message):
+    
+    
+    @app.on_message(filters.text & filters.private & filters.regex(r"^🔧 ادمین$"))
+    async def btn_admin(client: Client, message: Message):
+        """Admin panel."""
+        user_id = message.from_user.id
+        if not await is_admin(user_id):
             return
-        await cmd_stats(client, message)
-
-    # ==================== CALLBACK HANDLERS ====================
+        
+        await message.reply(
+            "🔧 **پنل ادمین**",
+            reply_markup=admin_keyboard()
+        )
     
-    @app.on_callback_query(filters.regex(r"^change_chunk_size$"))
-    async def cb_chunk_size(client: Client, callback_query: CallbackQuery):
-        """Chunk size selector."""
-        await callback_query.message.edit_text(
-            "📂 **حجم پارت‌های آپلود:**",
-            reply_markup=get_chunk_size_keyboard()
-        )
-
-    @app.on_callback_query(filters.regex(r"^set_chunk_(\d+)$"))
-    async def cb_set_chunk(client: Client, callback_query: CallbackQuery):
-        """Set chunk size."""
-        chunk_size = int(callback_query.matches[0].group(1))
-        await ConfigManager.update({"chunk_size_mb": chunk_size})
-        await callback_query.answer(f"✅ حجم پارت‌ها به {chunk_size}MB تغییر یافت")
-        config = await ConfigManager.get_config()
-        await callback_query.message.edit_text(
-            "⚙️ **تنظیمات ربات**",
-            reply_markup=get_settings_keyboard(config)
-        )
-
-    @app.on_callback_query(filters.regex(r"^back_to_settings$"))
-    async def cb_back_settings(client: Client, callback_query: CallbackQuery):
-        """Back to settings."""
-        config = await ConfigManager.get_config()
-        await callback_query.message.edit_text(
-            "⚙️ **تنظیمات ربات**",
-            reply_markup=get_settings_keyboard(config)
-        )
-
-    @app.on_callback_query(filters.regex(r"^close_menu$"))
-    async def cb_close(client: Client, callback_query: CallbackQuery):
-        """Close menu."""
-        await callback_query.message.delete()
-
-    # ==================== USER MANAGEMENT ====================
     
-    @app.on_callback_query(filters.regex(r"^usr_add$"))
-    async def cb_usr_add(client: Client, callback_query: CallbackQuery):
-        """Add user."""
-        user_id = callback_query.from_user.id
-        user_states[user_id] = {"action": "wait_for_new_user_id"}
-        await callback_query.message.reply(
-            "✍️ **شناسه عددی کاربر جدید:**",
-            reply_markup=ForceReply(True)
+    # ==================== CALLBACK ROUTER ====================
+    
+    @app.on_callback_query()
+    async def handle_callback(client: Client, query: CallbackQuery):
+        """Central callback router."""
+        user_id = query.from_user.id
+        data = query.data
+        
+        if data == "close":
+            await query.message.delete()
+            await query.answer()
+            return
+        
+        if data == "noop":
+            await query.answer()
+            return
+        
+        # Check auth for all other callbacks
+        if not await check_auth(user_id):
+            await query.answer("❌ غیرمجاز", show_alert=True)
+            return
+        
+        try:
+            # ==================== UPLOAD ====================
+            if data == "upload_file_direct":
+                user_states[user_id] = {"action": "awaiting_file"}
+                await query.message.reply(
+                    "📎 **فایل را ارسال کنید:**",
+                    reply_markup=ForceReply(True)
+                )
+                await query.answer()
+            
+            elif data == "upload_url_direct":
+                user_states[user_id] = {"action": "awaiting_url"}
+                await query.message.reply(
+                    "🔗 **لینک را ارسال کنید:**",
+                    reply_markup=ForceReply(True)
+                )
+                await query.answer()
+            
+            elif data == "upload_start":
+                if user_id not in upload_pending:
+                    await query.answer("❌ خطا: فایل یافت نشد", show_alert=True)
+                    return
+                
+                pending = upload_pending[user_id]
+                task_id = str(uuid.uuid4())
+                file_path = pending["file_path"]
+                file_name = pending["file_name"]
+                file_size = pending["file_size"]
+                
+                # Create task
+                task = await TaskManager.create_task(
+                    task_id, file_name, file_size, "tg_to_s3", user_id
+                )
+                
+                # Edit message to show progress
+                await query.message.edit_text("⏳ **در حال آپلود...**")
+                
+                # Start upload
+                asyncio.create_task(
+                    perform_upload(client, query.message, task, file_path, file_size)
+                )
+                await query.answer()
+                del upload_pending[user_id]
+            
+            # ==================== BROWSER ====================
+            elif data.startswith("browser_folder:"):
+                path = data.split(":", 1)[1]
+                config = await ConfigManager.get_config()
+                s3 = S3Client(config)
+                
+                try:
+                    items = await s3.list_files_in_folder(path)
+                    total = len(items)
+                    total_pages = (total + 4) // 5
+                    
+                    await query.message.edit_text(
+                        f"📁 **{path}** ({total} آیتم)",
+                        reply_markup=browser_folder_keyboard(path, items, 1, total_pages)
+                    )
+                except Exception as e:
+                    await query.answer(f"❌ {str(e)[:60]}", show_alert=True)
+            
+            elif data.startswith("browser_page:"):
+                parts = data.split(":")
+                path = parts[1]
+                page = int(parts[2])
+                config = await ConfigManager.get_config()
+                s3 = S3Client(config)
+                
+                items = await s3.list_files_in_folder(path)
+                total = len(items)
+                total_pages = (total + 4) // 5
+                
+                await query.message.edit_text(
+                    f"📁 **{path}** ({total} آیتم)",
+                    reply_markup=browser_folder_keyboard(path, items, page, total_pages)
+                )
+            
+            # ==================== FILE ACTIONS ====================
+            elif data.startswith("file_select:"):
+                file_path = data.split(":", 1)[1]
+                is_admin_user = await is_admin(user_id)
+                
+                await query.message.edit_text(
+                    f"📄 **{file_path}**",
+                    reply_markup=file_actions_keyboard(file_path, is_admin_user)
+                )
+            
+            elif data.startswith("file_download:"):
+                file_path = data.split(":", 1)[1]
+                config = await ConfigManager.get_config()
+                s3 = S3Client(config)
+                
+                await query.message.edit_text("⏳ **در حال دانلود...**")
+                
+                try:
+                    file_url = await s3.get_download_url(file_path)
+                    await query.message.reply(f"[دانلود]({file_url})")
+                except Exception as e:
+                    await query.message.edit_text(f"❌ خطا: {str(e)}")
+            
+            elif data.startswith("file_share:"):
+                file_path = data.split(":", 1)[1]
+                await query.message.edit_text(
+                    "🔗 **مدت انقضا را انتخاب کنید:**",
+                    reply_markup=share_expiry_keyboard(file_path)
+                )
+            
+            elif data.startswith("share_expiry:"):
+                parts = data.split(":")
+                file_path = parts[1]
+                expiry = int(parts[2])
+                
+                config = await ConfigManager.get_config()
+                s3 = S3Client(config)
+                
+                try:
+                    share_url = await s3.create_presigned_url(file_path, expiry)
+                    await query.message.edit_text(
+                        f"🔗 **لینک موقت:**\n\n`{share_url}`"
+                    )
+                except Exception as e:
+                    await query.answer(f"❌ {str(e)}", show_alert=True)
+            
+            elif data.startswith("file_delete:"):
+                if not await is_admin(user_id):
+                    await query.answer("❌ فقط ادمین", show_alert=True)
+                    return
+                
+                file_path = data.split(":", 1)[1]
+                config = await ConfigManager.get_config()
+                s3 = S3Client(config)
+                
+                try:
+                    await s3.delete_file(file_path)
+                    await query.message.edit_text("✅ فایل حذف شد")
+                except Exception as e:
+                    await query.answer(f"❌ {str(e)}", show_alert=True)
+            
+            # ==================== SETTINGS ====================
+            elif data == "settings_proxy":
+                await query.message.edit_text(
+                    "🌐 **پروکسی‌ها** (در حال توسعه)",
+                    reply_markup=settings_keyboard()
+                )
+            
+            elif data == "settings_chunk":
+                await query.message.edit_text(
+                    "📤 **حجم آپلود**",
+                    reply_markup=chunk_size_keyboard()
+                )
+            
+            elif data.startswith("chunk_set:"):
+                size = int(data.split(":", 1)[1])
+                await ConfigManager.update({"chunk_size_mb": size})
+                await query.answer(f"✅ حجم {size}MB تنظیم شد")
+                await query.message.edit_text(
+                    f"✅ حجم تنظیم شد: {size}MB",
+                    reply_markup=settings_keyboard()
+                )
+            
+            # ==================== ADMIN ====================
+            elif data == "admin_users":
+                users = await Database.get_users()
+                await query.message.edit_text(
+                    f"👥 **کاربران** ({len(users)})",
+                    reply_markup=user_list_keyboard(users)
+                )
+            
+            elif data.startswith("user_remove:"):
+                user_to_remove = int(data.split(":", 1)[1])
+                config = await ConfigManager.get_config()
+                owner_id = int(config.get("owner_id", 0))
+                
+                if user_to_remove == owner_id:
+                    await query.answer("❌ نمی‌توان ادمین حذف کرد", show_alert=True)
+                    return
+                
+                await Database.remove_user(user_to_remove)
+                await query.answer("✅ کاربر حذف شد")
+                
+                users = await Database.get_users()
+                await query.message.edit_text(
+                    f"👥 **کاربران** ({len(users)})",
+                    reply_markup=user_list_keyboard(users)
+                )
+            
+            elif data == "user_add":
+                user_states[user_id] = {"action": "awaiting_new_user_id"}
+                await query.message.reply(
+                    "👤 **شناسه کاربر جدید را ارسال کنید:**",
+                    reply_markup=ForceReply(True)
+                )
+                await query.answer()
+            
+            await query.answer()
+        
+        except Exception as e:
+            logger.error(f"Callback error: {e}", exc_info=True)
+            await query.answer(f"❌ خطا: {str(e)[:60]}", show_alert=True)
+    
+    
+    # ==================== TEXT MESSAGE HANDLERS ====================
+    
+    @app.on_message(filters.text & filters.private & ~filters.command)
+    async def handle_text_input(client: Client, message: Message):
+        """Handle user text input (awaiting responses)."""
+        user_id = message.from_user.id
+        
+        if user_id not in user_states:
+            return
+        
+        action = user_states[user_id].get("action")
+        
+        try:
+            # Awaiting URL input
+            if action == "awaiting_url":
+                url = message.text.strip()
+                if not url.startswith("http"):
+                    await message.reply("❌ لینک معتبر نیست (http/https)")
+                    return
+                
+                downloader = HTTPDownloader()
+                file_name, file_size = await downloader.get_file_info(url)
+                
+                upload_pending[user_id] = {
+                    "file_name": file_name,
+                    "file_size": file_size,
+                    "file_path": url,
+                    "source": "url"
+                }
+                
+                await message.reply(
+                    f"📦 **تایید دانلود و آپلود**\n\n"
+                    f"📝 نام: `{file_name}`\n"
+                    f"📊 حجم: `{file_size / 1024 / 1024:.1f} MB`",
+                    reply_markup=upload_confirm_keyboard()
+                )
+                del user_states[user_id]
+            
+            # Awaiting new user ID
+            elif action == "awaiting_new_user_id":
+                try:
+                    new_user_id = int(message.text.strip())
+                    await Database.add_user(new_user_id, "", "", is_admin=False)
+                    await message.reply(f"✅ کاربر {new_user_id} افزوده شد")
+                except ValueError:
+                    await message.reply("❌ شناسه معتبر نیست")
+                finally:
+                    del user_states[user_id]
+        
+        except Exception as e:
+            logger.error(f"Text input error: {e}")
+            await message.reply(f"❌ خطا: {str(e)[:100]}")
+            if user_id in user_states:
+                del user_states[user_id]
+    
+    
+    # ==================== FILE MESSAGE HANDLER ====================
+    
+    @app.on_message(filters.document | filters.photo)
+    async def handle_file_upload(client: Client, message: Message):
+        """Handle file uploads."""
+        user_id = message.from_user.id
+        
+        if user_id not in user_states or user_states[user_id].get("action") != "awaiting_file":
+            return
+        
+        try:
+            if message.document:
+                file_obj = message.document
+                file_name = file_obj.file_name or "file"
+                file_size = file_obj.file_size
+            else:
+                file_obj = message.photo
+                file_name = f"photo_{uuid.uuid4().hex[:8]}.jpg"
+                file_size = file_obj.file_size
+            
+            file_id = file_obj.file_id
+            
+            upload_pending[user_id] = {
+                "file_name": file_name,
+                "file_size": file_size,
+                "file_path": file_id,
+                "source": "telegram"
+            }
+            
+            await message.reply(
+                f"📦 **تایید آپلود**\n\n"
+                f"📝 نام: `{file_name}`\n"
+                f"📊 حجم: `{file_size / 1024 / 1024:.1f} MB`",
+                reply_markup=upload_confirm_keyboard()
+            )
+            del user_states[user_id]
+        
+        except Exception as e:
+            logger.error(f"File upload error: {e}")
+            await message.reply(f"❌ خطا: {str(e)}")
+
+
+async def perform_upload(client: Client, message: Message, task: TaskProgress, file_path: str, file_size: int):
+    """Perform the actual upload."""
+    try:
+        config = await ConfigManager.get_config()
+        s3 = S3Client(config)
+        
+        # Download and upload
+        if task.type == "tg_to_s3":
+            # Download from Telegram
+            downloader = HTTPDownloader()
+            local_path = await downloader.download_telegram_file(client, file_path)
+        else:
+            # Download from URL
+            downloader = HTTPDownloader()
+            local_path = await downloader.download_file(file_path)
+        
+        # Upload to S3
+        s3_key = await s3.upload_file(local_path, task.file_name, task.task_id)
+        s3_url = await s3.get_download_url(s3_key)
+        
+        await TaskManager.complete_task(task.task_id, s3_key, s3_url, 0, 0)
+        
+        await message.edit_text(
+            f"✅ **آپلود موفق**\n\n"
+            f"📝 نام: `{task.file_name}`\n"
+            f"🔗 [دانلود]({s3_url})"
         )
-        await callback_query.answer()
+    
+    except Exception as e:
+        logger.error(f"Upload error: {e}", exc_info=True)
+        await TaskManager.fail_task(task.task_id, str(e))
+        await message.edit_text(f"❌ خطا: {str(e)[:200]}")
 
 
+# Setup bot commands
 async def setup_commands(client: Client):
     """Set up bot commands menu."""
     try:
