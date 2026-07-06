@@ -108,8 +108,20 @@ def register_all_handlers(app: Client):
             total = len(items)
             total_pages = (total + 4) // 5
             
+            # Build formatted message with preview
+            msg_text = f"📁 **فایل‌های S3** ({total} آیتم)\n\n"
+            for item in items[:5]:  # Show first 5 items as preview
+                if item["type"] == "folder":
+                    msg_text += f"📁 {item['name']}\n"
+                else:
+                    size_mb = item["size"] / 1024 / 1024 if item["size"] > 0 else 0
+                    msg_text += f"📄 {item['name']} | {size_mb:.1f}MB\n"
+            
+            if total > 5:
+                msg_text += f"\n... و {total - 5} مورد دیگر"
+            
             await message.reply(
-                f"📁 **فایل‌های S3** ({total} آیتم)",
+                msg_text,
                 reply_markup=browser_folder_keyboard("/", items, 1, total_pages)
             )
         except Exception as e:
@@ -407,9 +419,31 @@ def register_all_handlers(app: Client):
                     s3 = S3Client(config)
                     
                     try:
+                        root_result = await s3.list_dir_contents("/")
+                        all_folders = root_result.get("folders", [])
                         all_files = await s3.list_files(prefix="", max_keys=1000)
-                        results = [{"name": f["key"], "path": f["key"], "size": f["size"]} 
-                                  for f in all_files if query_str.lower() in f["key"].lower()]
+                        
+                        results = []
+                        for folder in all_folders:
+                            folder_name = folder.rstrip("/").split("/")[-1]
+                            if query_str.lower() in folder_name.lower():
+                                results.append({
+                                    "type": "folder",
+                                    "name": folder_name,
+                                    "path": folder,
+                                    "size": 0
+                                })
+                        
+                        for f in all_files:
+                            file_name = f["key"].split("/")[-1]
+                            if query_str.lower() in f["key"].lower():
+                                results.append({
+                                    "type": "file",
+                                    "name": file_name,
+                                    "path": f["key"],
+                                    "size": f["size"]
+                                })
+                        
                         search_cache[user_id] = {"query": query_str, "results": results}
                     except Exception as e:
                         await query.answer(f"❌ {str(e)}", show_alert=True)
@@ -417,10 +451,29 @@ def register_all_handlers(app: Client):
                 
                 total_pages = (len(results) + 4) // 5
                 
-                await query.message.edit_text(
-                    f"🔍 **نتایج جستجو برای:** `{query_str}` ({len(results)} نتیجه)",
-                    reply_markup=search_results_keyboard(results, query_str, page, total_pages)
-                )
+                # Build formatted message with sizes
+                results_per_page = 5
+                start = (page - 1) * results_per_page
+                end = start + results_per_page
+                page_results = results[start:end]
+                
+                msg_text = f"🔍 **نتایج جستجو برای:** `{query_str}`\n\n"
+                for result in page_results:
+                    if result["type"] == "folder":
+                        msg_text += f"📁 {result['name']}\n"
+                    else:
+                        size_mb = result.get("size", 0) / 1024 / 1024
+                        msg_text += f"📄 {result['name']} | {size_mb:.1f}MB\n"
+                
+                msg_text += f"\n**صفحه {page} از {total_pages}** ({len(results)} نتیجه)"
+                
+                try:
+                    await query.message.edit_text(
+                        msg_text,
+                        reply_markup=search_results_keyboard(results, query_str, page, total_pages, str(user_id))
+                    )
+                except:
+                    await query.answer("✅", show_alert=False)
             
             elif data == "browser_back":
                 config = await ConfigManager.get_config()
@@ -437,10 +490,27 @@ def register_all_handlers(app: Client):
                     total = len(items)
                     total_pages = (total + 4) // 5
                     
-                    await query.message.edit_text(
-                        f"📁 **فایل‌های S3** ({total} آیتم)",
-                        reply_markup=browser_folder_keyboard("/", items, 1, total_pages)
-                    )
+                    # Build formatted message with table-like display
+                    msg_text = f"📁 **فایل‌های S3** ({total} آیتم)\n\n"
+                    for item in items[:10]:  # Show first 10 in preview
+                        if item["type"] == "folder":
+                            msg_text += f"📁 {item['name']}\n"
+                        else:
+                            size_mb = item["size"] / 1024 / 1024
+                            msg_text += f"📄 {item['name']} ({size_mb:.1f}MB)\n"
+                    
+                    if total > 10:
+                        msg_text += f"\n... و {total - 10} مورد دیگر"
+                    
+                    # Only edit if message exists and is different
+                    try:
+                        await query.message.edit_text(
+                            msg_text,
+                            reply_markup=browser_folder_keyboard("/", items, 1, total_pages)
+                        )
+                    except:
+                        # If same message, just answer
+                        await query.answer("✅", show_alert=False)
                 except Exception as e:
                     await query.answer(f"❌ {str(e)}", show_alert=True)
             
