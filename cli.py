@@ -701,7 +701,10 @@ class Menu:
 async def main():
     """Main entry point."""
     # Check for updates on every run
-    await Updater.check_and_notify()
+    try:
+        await UpdateManager.check_and_notify()
+    except Exception:
+        pass
     
     try:
         await Menu.main_menu()
