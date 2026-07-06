@@ -54,10 +54,11 @@ class BotService:
             )
 
             # Register handlers
-            from bot.handlers import register_all_handlers
+            from bot.handlers import register_all_handlers, setup_commands
             register_all_handlers(cls.client)
-
+            
             await cls.client.start()
+            await setup_commands(cls.client)
             cls._is_running = True
             logger.info("Zohal Uploader Bot started successfully.")
             

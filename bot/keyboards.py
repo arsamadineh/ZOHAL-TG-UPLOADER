@@ -1,25 +1,35 @@
 from pyrogram.types import (
     ReplyKeyboardMarkup, KeyboardButton,
-    InlineKeyboardMarkup, InlineKeyboardButton
+    InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
 )
 from core.config import ConfigManager
+
+# Bot Commands List for /help
+COMMANDS_LIST = [
+    BotCommand("start", "🪐 شروع و نمایش منوی اصلی"),
+    BotCommand("help", "📚 راهنمای جامع"),
+    BotCommand("settings", "⚙️ تنظیمات ربات"),
+    BotCommand("s3", "📁 مدیریت فایل‌های S3"),
+    BotCommand("stats", "📊 وضعیت سرور و S3"),
+    BotCommand("upload", "📤 آپلود فایل یا لینک"),
+]
 
 def get_main_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
     """Generate the persistent bottom keyboard for primary actions."""
     keyboard = [
         [
-            KeyboardButton("📤 ارسال لینک مستقیم"),
-            KeyboardButton("📁 مدیریت فایل‌های S3")
+            KeyboardButton("📤 آپلود"),
+            KeyboardButton("📁 فایل‌های S3")
         ],
         [
-            KeyboardButton("⚙️ تنظیمات ربات"),
-            KeyboardButton("ℹ️ راهنما و ویژگی‌ها")
+            KeyboardButton("⚙️ تنظیمات"),
+            KeyboardButton("📚 راهنما")
         ]
     ]
     if is_admin:
-        keyboard.append([KeyboardButton("👥 مدیریت کاربران")])
+        keyboard.append([KeyboardButton("👥 کاربران"), KeyboardButton("📊 وضعیت")])
     
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, placeholder="یک گزینه را انتخاب کنید...")
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True, one_time_keyboard=False)
 
 def get_help_keyboard() -> InlineKeyboardMarkup:
     """Help inline markup to link to docs/features."""
