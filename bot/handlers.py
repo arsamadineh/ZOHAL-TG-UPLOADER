@@ -352,12 +352,11 @@ def register_all_handlers(app: Client):
         )
         await callback_query.answer()
 
-    # ==================== UTILS ====================
-    
-    async def setup_commands(client: Client):
-        """Set up bot commands menu."""
-        try:
-            await client.set_bot_commands(COMMANDS_LIST)
-            logger.info("Bot commands registered successfully.")
-        except Exception as e:
-            logger.warning(f"Could not set bot commands: {e}")
+
+async def setup_commands(client: Client):
+    """Set up bot commands menu."""
+    try:
+        await client.set_bot_commands(COMMANDS_LIST)
+        logger.info("Bot commands registered successfully.")
+    except Exception as e:
+        logger.warning(f"Could not set bot commands: {e}")
