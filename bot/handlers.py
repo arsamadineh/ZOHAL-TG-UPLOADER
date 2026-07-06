@@ -363,6 +363,38 @@ def register_all_handlers(app: Client):
                 )
                 await query.answer()
             
+            elif data.startswith("search_folder:"):
+                folder_path = data.split(":", 1)[1]
+                config = await ConfigManager.get_config()
+                s3 = S3Client(config)
+                
+                try:
+                    result = await s3.list_dir_contents(folder_path)
+                    folders = result.get("folders", [])
+                    files = result.get("files", [])
+                    
+                    items = [{"type": "folder", "name": f.rstrip("/"), "size": 0} for f in folders]
+                    items += [{"type": "file", "name": f["key"].split("/")[-1], "size": f["size"]} for f in files]
+                    
+                    total = len(items)
+                    total_pages = (total + 4) // 5
+                    
+                    await query.message.edit_text(
+                        f"📁 **{folder_path}** ({total} آیتم)",
+                        reply_markup=browser_folder_keyboard(folder_path, items, 1, total_pages)
+                    )
+                except Exception as e:
+                    await query.answer(f"❌ {str(e)[:60]}", show_alert=True)
+            
+            elif data.startswith("search_file:"):
+                file_path = data.split(":", 1)[1]
+                is_admin_user = await is_admin(user_id)
+                
+                await query.message.edit_text(
+                    f"📄 **{file_path}**",
+                    reply_markup=file_actions_keyboard(file_path, is_admin_user)
+                )
+            
             elif data.startswith("search_page:"):
                 parts = data.split(":")
                 query_str = parts[1]
@@ -521,9 +553,35 @@ def register_all_handlers(app: Client):
                 s3 = S3Client(config)
                 
                 try:
+                    # Get all files and folders
+                    root_result = await s3.list_dir_contents("/")
+                    all_folders = root_result.get("folders", [])
                     all_files = await s3.list_files(prefix="", max_keys=1000)
-                    results = [{"name": f["key"], "path": f["key"], "size": f["size"]} 
-                              for f in all_files if query_str.lower() in f["key"].lower()]
+                    
+                    # Build combined results with type
+                    results = []
+                    
+                    # Add matching folders
+                    for folder in all_folders:
+                        folder_name = folder.rstrip("/").split("/")[-1]
+                        if query_str.lower() in folder_name.lower():
+                            results.append({
+                                "type": "folder",
+                                "name": folder_name,
+                                "path": folder,
+                                "size": 0
+                            })
+                    
+                    # Add matching files
+                    for f in all_files:
+                        file_name = f["key"].split("/")[-1]
+                        if query_str.lower() in f["key"].lower():
+                            results.append({
+                                "type": "file",
+                                "name": file_name,
+                                "path": f["key"],
+                                "size": f["size"]
+                            })
                     
                     search_cache[user_id] = {"query": query_str, "results": results}
                     total_pages = (len(results) + 4) // 5
@@ -533,7 +591,7 @@ def register_all_handlers(app: Client):
                     else:
                         await message.reply(
                             f"🔍 **نتایج جستجو برای:** `{query_str}` ({len(results)} نتیجه)",
-                            reply_markup=search_results_keyboard(results, query_str, 1, total_pages)
+                            reply_markup=search_results_keyboard(results, query_str, 1, total_pages, str(user_id))
                         )
                 except Exception as e:
                     await message.reply(f"❌ خطا: {str(e)}")

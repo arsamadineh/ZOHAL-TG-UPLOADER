@@ -178,9 +178,10 @@ def search_results_keyboard(
     results: list,
     query: str,
     page: int = 1,
-    total_pages: int = 1
+    total_pages: int = 1,
+    result_cache_id: str = None
 ) -> InlineKeyboardMarkup:
-    """Paginated search results."""
+    """Paginated search results with short callback data."""
     buttons = []
     
     results_per_page = 5
@@ -188,12 +189,22 @@ def search_results_keyboard(
     end = start + results_per_page
     page_results = results[start:end]
     
-    for result in page_results:
-        size_str = f" ({result.get('size', 0) / 1024 / 1024:.1f}MB)"
-        btn = InlineKeyboardButton(
-            f"📄 {result['name']}{size_str}",
-            callback_data=f"file_select:{result['path']}"
-        )
+    for idx, result in enumerate(page_results):
+        item_type = result.get("type", "file")
+        
+        if item_type == "folder":
+            label = f"📁 {result['name']}"
+            callback = f"search_folder:{result['path']}"
+        else:
+            size_str = f" ({result.get('size', 0) / 1024 / 1024:.1f}MB)"
+            label = f"📄 {result['name']}{size_str}"
+            callback = f"search_file:{result['path']}"
+        
+        # Keep callback short (< 64 bytes)
+        if len(callback) > 60:
+            callback = f"search_item:{result_cache_id}:{idx}"
+        
+        btn = InlineKeyboardButton(label, callback_data=callback)
         buttons.append([btn])
     
     # Pagination
@@ -202,13 +213,13 @@ def search_results_keyboard(
         if page > 1:
             nav.append(InlineKeyboardButton(
                 "◀️ قبل",
-                callback_data=f"search_page:{query}:{page-1}"
+                callback_data=f"search_page:{query[:20]}:{page-1}"
             ))
         nav.append(InlineKeyboardButton(f"{page}/{total_pages}", callback_data="noop"))
         if page < total_pages:
             nav.append(InlineKeyboardButton(
                 "بعد ▶️",
-                callback_data=f"search_page:{query}:{page+1}"
+                callback_data=f"search_page:{query[:20]}:{page+1}"
             ))
         buttons.append(nav)
     
